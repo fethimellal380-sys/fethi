@@ -1,0 +1,385 @@
+//@version=5
+indicator("Gold Sniper V211 - Three Engines", overlay = true, max_boxes_count = 500, max_labels_count = 500)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V211 - بناء ثلاث محركات مستقلة كلياً:
+//   1) TOUCH ENGINE    : لمسات الويك (شراء/بيع/تعزيز)
+//   2) BREAK ENGINE    : كسور بإغلاق مؤكد على الفريم الحالي
+//   3) MTF ENGINE      : كسور على فريمات أعلى (M15/H1/H4)
+// كل محرك له state خاص به ولا يتأثر بالآخرين.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+//==================================================
+// ⚙️ الإعدادات العامة
+//==================================================
+grp_gen = "الإعدادات العامة"
+
+offset       = input.float(1.0, "Offset (حساسية اللمس)", minval = 0.1, step = 0.1, group = grp_gen)
+label_off    = input.int(0, "إزاحة الأرقام يميناً", group = grp_gen)
+extend_right = input.int(35, "امتداد البوكس يميناً", minval = 5, maxval = 100, group = grp_gen)
+
+grp_col = "ألوان المناطق"
+upper_c = input.color(color.new(color.red,  84), "منطقة بيع (أحمر)",  group = grp_col)
+lower_c = input.color(color.new(color.lime, 84), "منطقة شراء (أخضر)", group = grp_col)
+
+//==================================================
+// 🔔 إعدادات MTF
+//==================================================
+grp_mtf = "🔔 تنبيهات الفريمات"
+
+en_15m = input.bool(true, "تفعيل M15", group = grp_mtf)
+en_1h  = input.bool(true, "تفعيل H1",  group = grp_mtf)
+en_4h  = input.bool(true, "تفعيل H4",  group = grp_mtf)
+
+//==================================================
+// 🧮 أدوات
+//==================================================
+f_num(v) => str.tostring(v, "#.##")
+
+//==================================================
+// 📥 إدخال المناطق (10 مناطق)
+//==================================================
+z1=input.bool(true,"Z1",inline="1"),   t1=input.float(2050.0,"T",inline="1"),  b1=input.float(2045.0,"B",inline="1")
+z2=input.bool(true,"Z2",inline="2"),   t2=input.float(2040.0,"T",inline="2"),  b2=input.float(2035.0,"B",inline="2")
+z3=input.bool(true,"Z3",inline="3"),   t3=input.float(2030.0,"T",inline="3"),  b3=input.float(2025.0,"B",inline="3")
+z4=input.bool(true,"Z4",inline="4"),   t4=input.float(2020.0,"T",inline="4"),  b4=input.float(2015.0,"B",inline="4")
+z5=input.bool(true,"Z5",inline="5"),   t5=input.float(2010.0,"T",inline="5"),  b5=input.float(2005.0,"B",inline="5")
+z6=input.bool(true,"Z6",inline="6"),   t6=input.float(2000.0,"T",inline="6"),  b6=input.float(1995.0,"B",inline="6")
+z7=input.bool(true,"Z7",inline="7"),   t7=input.float(1990.0,"T",inline="7"),  b7=input.float(1985.0,"B",inline="7")
+z8=input.bool(true,"Z8",inline="8"),   t8=input.float(1980.0,"T",inline="8"),  b8=input.float(1975.0,"B",inline="8")
+z9=input.bool(true,"Z9",inline="9"),   t9=input.float(1970.0,"T",inline="9"),  b9=input.float(1965.0,"B",inline="9")
+z10=input.bool(true,"Z10",inline="10"),t10=input.float(1960.0,"T",inline="10"),b10=input.float(1955.0,"B",inline="10")
+
+en_arr = array.from(z1,z2,z3,z4,z5,z6,z7,z8,z9,z10)
+tp_arr = array.from(t1,t2,t3,t4,t5,t6,t7,t8,t9,t10)
+bt_arr = array.from(b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+
+//==================================================
+// 🛰️ بيانات الفريمات (Anti-Repaint)
+//   ناخد إغلاق الشمعة المؤكدة [close[1]] والشمعة قبلها [close[2]]
+//==================================================
+[m15_now, m15_prev] = request.security(syminfo.tickerid, "15",  [close[1], close[2]], lookahead = barmerge.lookahead_on)
+[h1_now,  h1_prev]  = request.security(syminfo.tickerid, "60",  [close[1], close[2]], lookahead = barmerge.lookahead_on)
+[h4_now,  h4_prev]  = request.security(syminfo.tickerid, "240", [close[1], close[2]], lookahead = barmerge.lookahead_on)
+
+new_m15 = timeframe.change("15")
+new_h1  = timeframe.change("60")
+new_h4  = timeframe.change("240")
+
+//==================================================
+// 🎨 تهيئة الرسم
+//==================================================
+var boxes  = array.new_box(10)
+var labels = array.new_label(10)
+
+if barstate.isfirst
+    for i = 0 to 9
+        array.set(boxes,  i, box.new(na, na, na, na, border_width = 1))
+        array.set(labels, i, label.new(bar_index, close, "", style = label.style_label_center))
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 1️⃣ TOUCH ENGINE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//   - يعتمد على لمس الويك (high/low) فقط، لا على إغلاق الشمعة.
+//   - أي منطقة تحت السعر الحالي = منطقة شراء.
+//   - أي منطقة فوق السعر الحالي = منطقة بيع.
+//   - أول لمسة = إشارة أساسية.
+//   - اللمسات المتكررة = تعزيز.
+//   - لا يُعاد ضبط الإشارة الأساسية إلا بعد الوصول للجهة المقابلة.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var touch_main_fired = array.new_bool(10, false)
+
+string touch_msg = ""
+
+// Pass A : هل في هذه الشمعة لمسة على جهة الشراء أو على جهة البيع ؟
+bool any_buy_touch  = false
+bool any_sell_touch = false
+
+for i = 0 to 9
+    if array.get(en_arr, i)
+        top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        mid_i = (top_i + bot_i) / 2
+        if high >= bot_i - offset and low <= top_i + offset
+            if mid_i < close
+                any_buy_touch  := true
+            else
+                any_sell_touch := true
+
+// Pass B : إعادة تسليح الجهة المقابلة (لمس الجهة الأخرى = إعادة فتح الإشارات)
+if any_sell_touch
+    for i = 0 to 9
+        top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        mid_i = (top_i + bot_i) / 2
+        if mid_i < close
+            array.set(touch_main_fired, i, false)
+
+if any_buy_touch
+    for i = 0 to 9
+        top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        mid_i = (top_i + bot_i) / 2
+        if mid_i > close
+            array.set(touch_main_fired, i, false)
+
+// Pass C : إطلاق التنبيهات
+for i = 0 to 9
+    if array.get(en_arr, i)
+        top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        mid_i = (top_i + bot_i) / 2
+
+        if high >= bot_i - offset and low <= top_i + offset
+            is_buy_zone   = mid_i < close
+            already_fired = array.get(touch_main_fired, i)
+
+            if is_buy_zone
+                if not already_fired
+                    touch_msg += "🟢 شراء [ " + f_num(top_i) + " ]\n"
+                    array.set(touch_main_fired, i, true)
+                else
+                    touch_msg += "🟩 تعزيز شراء [ " + f_num(bot_i) + " ]\n"
+            else
+                if not already_fired
+                    touch_msg += "🔴 بيع [ " + f_num(bot_i) + " ]\n"
+                    array.set(touch_main_fired, i, true)
+                else
+                    touch_msg += "🟥 تعزيز بيع [ " + f_num(top_i) + " ]\n"
+
+if touch_msg != ""
+    alert(touch_msg, alert.freq_once_per_bar)
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2️⃣ BREAK ENGINE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//   - يحتاج إغلاق شمعة مؤكد خارج البوكس (لا يُحتسب الويك).
+//   - مكافحة التكرار: يُعاد التسليح فقط بعد العودة إلى داخل البوكس.
+//   - الكسر المتتالي على أكثر من منطقة في نفس الشمعة = تنبيه واحد مجمّع.
+//   - 🔄 Role Flip: عندما يحدث كسر بعكس آخر كسر سابق على نفس المنطقة.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var break_armed_up   = array.new_bool(10, true)
+var break_armed_dn   = array.new_bool(10, true)
+var last_break_dir   = array.new_string(10, "")  // "UP" | "DN" | ""
+
+string break_msg = ""
+
+if barstate.isconfirmed
+
+    int   bull_cnt = 0
+    float bull_lo  = na
+    float bull_hi  = na
+
+    int   bear_cnt = 0
+    float bear_lo  = na
+    float bear_hi  = na
+
+    int flip_up_cnt = 0
+    int flip_dn_cnt = 0
+
+    for i = 0 to 9
+        if array.get(en_arr, i)
+            top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+
+            // إعادة التسليح فقط عند العودة لداخل البوكس
+            if close <= top_i and close >= bot_i
+                array.set(break_armed_up, i, true)
+                array.set(break_armed_dn, i, true)
+
+            // كسر صاعد (إغلاق مؤكد فوق السقف)
+            if close > top_i and array.get(break_armed_up, i)
+                array.set(break_armed_up, i, false)
+
+                prev_dir = array.get(last_break_dir, i)
+                if prev_dir == "DN"
+                    flip_up_cnt += 1
+                array.set(last_break_dir, i, "UP")
+
+                bull_cnt += 1
+                bull_lo := na(bull_lo) ? bot_i : math.min(bull_lo, bot_i)
+                bull_hi := na(bull_hi) ? top_i : math.max(bull_hi, top_i)
+
+            // كسر هابط (إغلاق مؤكد تحت القاع)
+            if close < bot_i and array.get(break_armed_dn, i)
+                array.set(break_armed_dn, i, false)
+
+                prev_dir = array.get(last_break_dir, i)
+                if prev_dir == "UP"
+                    flip_dn_cnt += 1
+                array.set(last_break_dir, i, "DN")
+
+                bear_cnt += 1
+                bear_lo := na(bear_lo) ? bot_i : math.min(bear_lo, bot_i)
+                bear_hi := na(bear_hi) ? top_i : math.max(bear_hi, top_i)
+
+    if bull_cnt > 0
+        break_msg += (bull_cnt > 1 ? "⚡⬆️ كسر متتالي 🟢 [ " : "⚡ كسر ⬆️ 🟢 [ ") + f_num(bull_lo) + " ⟶ " + f_num(bull_hi) + " ]\n"
+    if bear_cnt > 0
+        break_msg += (bear_cnt > 1 ? "⚡⬇️ كسر متتالي 🔴 [ " : "⚡ كسر ⬇️ 🔴 [ ") + f_num(bear_lo) + " ⟶ " + f_num(bear_hi) + " ]\n"
+    if flip_up_cnt > 0
+        break_msg += "🔄 انقلاب الدور: مقاومة ⟶ دعم (×" + str.tostring(flip_up_cnt) + ")\n"
+    if flip_dn_cnt > 0
+        break_msg += "🔄 انقلاب الدور: دعم ⟶ مقاومة (×" + str.tostring(flip_dn_cnt) + ")\n"
+
+if break_msg != ""
+    alert(break_msg, alert.freq_once_per_bar_close)
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3️⃣ MTF ENGINE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//   - إغلاقات مؤكدة لفريمات أعلى فقط (لا ويك، لا لمسات).
+//   - state مستقل لكل فريم (M15 / H1 / H4) لكل منطقة.
+//   - التسليح يُستعاد فقط بدخول إغلاق HTF داخل البوكس.
+//   - الكسور المتعددة على نفس الفريم في نفس HTF Bar تُجمع في تنبيه واحد.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var m15_armed_up = array.new_bool(10, true)
+var m15_armed_dn = array.new_bool(10, true)
+var h1_armed_up  = array.new_bool(10, true)
+var h1_armed_dn  = array.new_bool(10, true)
+var h4_armed_up  = array.new_bool(10, true)
+var h4_armed_dn  = array.new_bool(10, true)
+
+string mtf_msg = ""
+
+// ───── M15 ─────
+if en_15m and new_m15 and not na(m15_now) and not na(m15_prev)
+    int   up_cnt = 0
+    float up_lo  = na
+    float up_hi  = na
+    int   dn_cnt = 0
+    float dn_lo  = na
+    float dn_hi  = na
+
+    for i = 0 to 9
+        if array.get(en_arr, i)
+            top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+
+            if m15_now <= top_i and m15_now >= bot_i
+                array.set(m15_armed_up, i, true)
+                array.set(m15_armed_dn, i, true)
+
+            if m15_prev <= top_i and m15_now > top_i and array.get(m15_armed_up, i)
+                array.set(m15_armed_up, i, false)
+                up_cnt += 1
+                up_lo := na(up_lo) ? bot_i : math.min(up_lo, bot_i)
+                up_hi := na(up_hi) ? top_i : math.max(up_hi, top_i)
+
+            if m15_prev >= bot_i and m15_now < bot_i and array.get(m15_armed_dn, i)
+                array.set(m15_armed_dn, i, false)
+                dn_cnt += 1
+                dn_lo := na(dn_lo) ? bot_i : math.min(dn_lo, bot_i)
+                dn_hi := na(dn_hi) ? top_i : math.max(dn_hi, top_i)
+
+    if up_cnt > 0
+        mtf_msg += (up_cnt > 1 ? "⚡⬆️ كسر M15 متتالي 🟢 [ " : "⚡🟢 كسر M15 [ ") + f_num(up_lo) + " ⟶ " + f_num(up_hi) + " ]\n"
+    if dn_cnt > 0
+        mtf_msg += (dn_cnt > 1 ? "⚡⬇️ كسر M15 متتالي 🔴 [ " : "⚡🔴 كسر M15 [ ") + f_num(dn_lo) + " ⟶ " + f_num(dn_hi) + " ]\n"
+
+// ───── H1 ─────
+if en_1h and new_h1 and not na(h1_now) and not na(h1_prev)
+    int   up_cnt = 0
+    float up_lo  = na
+    float up_hi  = na
+    int   dn_cnt = 0
+    float dn_lo  = na
+    float dn_hi  = na
+
+    for i = 0 to 9
+        if array.get(en_arr, i)
+            top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+
+            if h1_now <= top_i and h1_now >= bot_i
+                array.set(h1_armed_up, i, true)
+                array.set(h1_armed_dn, i, true)
+
+            if h1_prev <= top_i and h1_now > top_i and array.get(h1_armed_up, i)
+                array.set(h1_armed_up, i, false)
+                up_cnt += 1
+                up_lo := na(up_lo) ? bot_i : math.min(up_lo, bot_i)
+                up_hi := na(up_hi) ? top_i : math.max(up_hi, top_i)
+
+            if h1_prev >= bot_i and h1_now < bot_i and array.get(h1_armed_dn, i)
+                array.set(h1_armed_dn, i, false)
+                dn_cnt += 1
+                dn_lo := na(dn_lo) ? bot_i : math.min(dn_lo, bot_i)
+                dn_hi := na(dn_hi) ? top_i : math.max(dn_hi, top_i)
+
+    if up_cnt > 0
+        mtf_msg += (up_cnt > 1 ? "⚡⬆️ كسر H1 متتالي 🟢 [ " : "⚡🟢 كسر H1 [ ") + f_num(up_lo) + " ⟶ " + f_num(up_hi) + " ]\n"
+    if dn_cnt > 0
+        mtf_msg += (dn_cnt > 1 ? "⚡⬇️ كسر H1 متتالي 🔴 [ " : "⚡🔴 كسر H1 [ ") + f_num(dn_lo) + " ⟶ " + f_num(dn_hi) + " ]\n"
+
+// ───── H4 ─────
+if en_4h and new_h4 and not na(h4_now) and not na(h4_prev)
+    int   up_cnt = 0
+    float up_lo  = na
+    float up_hi  = na
+    int   dn_cnt = 0
+    float dn_lo  = na
+    float dn_hi  = na
+
+    for i = 0 to 9
+        if array.get(en_arr, i)
+            top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+
+            if h4_now <= top_i and h4_now >= bot_i
+                array.set(h4_armed_up, i, true)
+                array.set(h4_armed_dn, i, true)
+
+            if h4_prev <= top_i and h4_now > top_i and array.get(h4_armed_up, i)
+                array.set(h4_armed_up, i, false)
+                up_cnt += 1
+                up_lo := na(up_lo) ? bot_i : math.min(up_lo, bot_i)
+                up_hi := na(up_hi) ? top_i : math.max(up_hi, top_i)
+
+            if h4_prev >= bot_i and h4_now < bot_i and array.get(h4_armed_dn, i)
+                array.set(h4_armed_dn, i, false)
+                dn_cnt += 1
+                dn_lo := na(dn_lo) ? bot_i : math.min(dn_lo, bot_i)
+                dn_hi := na(dn_hi) ? top_i : math.max(dn_hi, top_i)
+
+    if up_cnt > 0
+        mtf_msg += (up_cnt > 1 ? "🚀⬆️ كسر H4 متتالي 🟢 [ " : "🚀🟢 كسر H4 [ ") + f_num(up_lo) + " ⟶ " + f_num(up_hi) + " ]\n"
+    if dn_cnt > 0
+        mtf_msg += (dn_cnt > 1 ? "🚀⬇️ كسر H4 متتالي 🔴 [ " : "🚀🔴 كسر H4 [ ") + f_num(dn_lo) + " ⟶ " + f_num(dn_hi) + " ]\n"
+
+if mtf_msg != ""
+    alert(mtf_msg, alert.freq_once_per_bar_close)
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🎨 الرسم (Boxes + Labels) — مطابق للنسخ السابقة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if barstate.islast
+    for i = 0 to 9
+        if array.get(en_arr, i)
+            top_i = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            bot_i = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+            mid_i = (top_i + bot_i) / 2
+
+            is_buy_zone = mid_i < close
+            f_col       = is_buy_zone ? lower_c : upper_c
+
+            bx      = array.get(boxes,  i)
+            lb      = array.get(labels, i)
+            right_p = bar_index + extend_right
+
+            box.set_left(bx,         bar_index - 500)
+            box.set_right(bx,        right_p)
+            box.set_top(bx,          top_i)
+            box.set_bottom(bx,       bot_i)
+            box.set_bgcolor(bx,      f_col)
+            box.set_border_color(bx, color.new(f_col, 40))
+
+            label.set_x(lb,         right_p + label_off)
+            label.set_y(lb,         mid_i)
+            label.set_text(lb,      "[ " + f_num(bot_i) + " ⟶ " + f_num(top_i) + " ]")
+            label.set_color(lb,     color.new(f_col, 15))
+            label.set_textcolor(lb, color.black)
