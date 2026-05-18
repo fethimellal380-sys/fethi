@@ -1,0 +1,367 @@
+//@version=5
+indicator("Gold Sniper V202 - Anti-Repaint Build", overlay = true, max_boxes_count = 500, max_labels_count = 500)
+
+//==================================================
+// ⚙️ الإعدادات العامة
+//==================================================
+grp_gen = "الإعدادات العامة"
+
+offset       = input.float(1.0, "Offset (حساسية اللمس)", minval = 0.1, step = 0.1, group = grp_gen)
+label_off    = input.int(0, "إزاحة الأرقام يميناً", group = grp_gen)
+extend_right = input.int(35, "امتداد البوكس يميناً", minval = 5, maxval = 100, group = grp_gen)
+cooldown_bars = input.int(0, "Cooldown بين الإشارات (شموع)", minval = 0, group = grp_gen)
+
+grp_col = "ألوان المناطق"
+
+upper_c = input.color(color.new(color.red, 84),  "منطقة بيع (أحمر)",  group = grp_col)
+lower_c = input.color(color.new(color.lime, 84), "منطقة شراء (أخضر)", group = grp_col)
+
+//==================================================
+// 🔔 إعدادات MTF
+//==================================================
+grp_mtf = "🔔 تنبيهات الفريمات"
+
+en_15m = input.bool(true, "تفعيل M15", group = grp_mtf)
+en_1h  = input.bool(true, "تفعيل H1",  group = grp_mtf)
+en_4h  = input.bool(true, "تفعيل H4",  group = grp_mtf)
+
+f_num(vl) => str.tostring(vl, "#.##")
+
+//==================================================
+// 📥 إدخال المناطق
+//==================================================
+z1=input.bool(true,"Z1",inline="1"),   t1=input.float(2050.0,"T",inline="1"),  b1=input.float(2045.0,"B",inline="1")
+z2=input.bool(true,"Z2",inline="2"),   t2=input.float(2040.0,"T",inline="2"),  b2=input.float(2035.0,"B",inline="2")
+z3=input.bool(true,"Z3",inline="3"),   t3=input.float(2030.0,"T",inline="3"),  b3=input.float(2025.0,"B",inline="3")
+z4=input.bool(true,"Z4",inline="4"),   t4=input.float(2020.0,"T",inline="4"),  b4=input.float(2015.0,"B",inline="4")
+z5=input.bool(true,"Z5",inline="5"),   t5=input.float(2010.0,"T",inline="5"),  b5=input.float(2005.0,"B",inline="5")
+z6=input.bool(true,"Z6",inline="6"),   t6=input.float(2000.0,"T",inline="6"),  b6=input.float(1995.0,"B",inline="6")
+z7=input.bool(true,"Z7",inline="7"),   t7=input.float(1990.0,"T",inline="7"),  b7=input.float(1985.0,"B",inline="7")
+z8=input.bool(true,"Z8",inline="8"),   t8=input.float(1980.0,"T",inline="8"),  b8=input.float(1975.0,"B",inline="8")
+z9=input.bool(true,"Z9",inline="9"),   t9=input.float(1970.0,"T",inline="9"),  b9=input.float(1965.0,"B",inline="9")
+z10=input.bool(true,"Z10",inline="10"),t10=input.float(1960.0,"T",inline="10"),b10=input.float(1955.0,"B",inline="10")
+
+en_arr = array.from(z1,z2,z3,z4,z5,z6,z7,z8,z9,z10)
+tp_arr = array.from(t1,t2,t3,t4,t5,t6,t7,t8,t9,t10)
+bt_arr = array.from(b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+
+//==================================================
+// 🛰️ بيانات الفريمات الحقيقية (Anti-Repaint)
+// نستعمل close[1] + lookahead_on -> قيمة ثابتة بعد إغلاق الشمعة الأعلى
+//==================================================
+[m15_close, m15_prev] = request.security(syminfo.tickerid, "15",  [close[1], close[2]], lookahead = barmerge.lookahead_on)
+[h1_close,  h1_prev]  = request.security(syminfo.tickerid, "60",  [close[1], close[2]], lookahead = barmerge.lookahead_on)
+[h4_close,  h4_prev]  = request.security(syminfo.tickerid, "240", [close[1], close[2]], lookahead = barmerge.lookahead_on)
+
+//==================================================
+// ⏰ تأكيد إغلاق الفريمات
+//==================================================
+new_m15 = timeframe.change("15")
+new_h1  = timeframe.change("60")
+new_h4  = timeframe.change("240")
+
+//==================================================
+// 🧠 نظام الذاكرة
+//==================================================
+var zone_states     = array.new_string(10, "IDLE")
+var zone_role       = array.new_string(10, "NEUTRAL")
+
+var buy_reinforced  = array.new_bool(10, false)
+var sell_reinforced = array.new_bool(10, false)
+
+var freeze_main     = array.new_bool(10, false)
+var last_trade_bar  = array.new_int(10, -1)
+
+var buy_lock_arr    = array.new_bool(10, false)
+var sell_lock_arr   = array.new_bool(10, false)
+
+// تتبع المناطق التي لُمست في الشمعة الحالية (لمنطق Reclaim)
+var hit_zones       = array.new_bool(10, false)
+
+if barstate.isnew
+    for i = 0 to 9
+        array.set(buy_lock_arr,  i, false)
+        array.set(sell_lock_arr, i, false)
+        array.set(hit_zones,     i, false)
+
+var boxes  = array.new_box(10)
+var labels = array.new_label(10)
+
+if barstate.isfirst
+    for i = 0 to 9
+        array.set(boxes, i, box.new(na, na, na, na, border_width = 1))
+        array.set(labels, i, label.new(
+             x = bar_index,
+             y = close,
+             text = "",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_center,
+             size = size.normal))
+
+//==================================================
+// 🔍 المرور الأول: تحديد كل المناطق الملموسة
+//==================================================
+for i = 0 to 9
+    if array.get(en_arr, i)
+        t_v = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        b_v = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        if high >= b_v - offset and low <= t_v + offset
+            array.set(hit_zones, i, true)
+
+//==================================================
+// 🧮 متغيرات تجميع الكسر الرئيسي
+//==================================================
+var float bull_min = na
+var float bull_max = na
+var int   bull_count = 0
+
+var float bear_min = na
+var float bear_max = na
+var int   bear_count = 0
+
+if barstate.isconfirmed
+    bull_min := na
+    bull_max := na
+    bull_count := 0
+    bear_min := na
+    bear_max := na
+    bear_count := 0
+
+//==================================================
+// 🛰️ متغيرات تجميع تنبيهات MTF
+//==================================================
+var int   m15_up_cnt = 0, var float m15_up_min = na, var float m15_up_max = na
+var int   m15_dn_cnt = 0, var float m15_dn_min = na, var float m15_dn_max = na
+var int   h1_up_cnt  = 0, var float h1_up_min  = na, var float h1_up_max  = na
+var int   h1_dn_cnt  = 0, var float h1_dn_min  = na, var float h1_dn_max  = na
+var int   h4_up_cnt  = 0, var float h4_up_min  = na, var float h4_up_max  = na
+var int   h4_dn_cnt  = 0, var float h4_dn_min  = na, var float h4_dn_max  = na
+
+if new_m15
+    m15_up_cnt := 0, m15_up_min := na, m15_up_max := na
+    m15_dn_cnt := 0, m15_dn_min := na, m15_dn_max := na
+if new_h1
+    h1_up_cnt := 0, h1_up_min := na, h1_up_max := na
+    h1_dn_cnt := 0, h1_dn_min := na, h1_dn_max := na
+if new_h4
+    h4_up_cnt := 0, h4_up_min := na, h4_up_max := na
+    h4_dn_cnt := 0, h4_dn_min := na, h4_dn_max := na
+
+//==================================================
+// ⚙️ المرور الرئيسي
+//==================================================
+for i = 0 to 9
+
+    if array.get(en_arr, i)
+
+        top_v = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        bot_v = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        mid_v = (top_v + bot_v) / 2
+
+        state         = array.get(zone_states, i)
+        current_role  = array.get(zone_role, i)
+        frozen        = array.get(freeze_main, i)
+
+        trade_allowed = (bar_index - array.get(last_trade_bar, i)) > cooldown_bars
+
+        bool lock_buy  = array.get(buy_lock_arr, i)
+        bool lock_sell = array.get(sell_lock_arr, i)
+
+        bool zone_broken_this_bar = false
+
+        //==================================================
+        // 🔄 Dynamic Reclaim (يفحص كل المناطق الملموسة لا واحدة فقط)
+        //==================================================
+        for j = 0 to 9
+            if j != i and array.get(hit_zones, j)
+                if (state == "BUYING" and j > i) or (state == "SELLING" and j < i)
+                    array.set(zone_states,    i, "IDLE")
+                    array.set(freeze_main,    i, false)
+                    array.set(buy_reinforced, i, false)
+                    array.set(sell_reinforced,i, false)
+                    state  := "IDLE"
+                    frozen := false
+
+        //==================================================
+        // ⚡ الكسر الرئيسي (real-time على فريم الشارت)
+        //==================================================
+        if barstate.isconfirmed
+
+            is_break_up = close > top_v and low  <= top_v
+            is_break_dn = close < bot_v and high >= bot_v
+
+            if is_break_up or is_break_dn
+
+                zone_broken_this_bar := true
+
+                if is_break_up
+                    array.set(sell_lock_arr, i, true)
+                    if current_role != "SUPPORT"
+                        array.set(zone_role, i, "SUPPORT")
+                        bull_count += 1
+                        bull_min := na(bull_min) ? bot_v : math.min(bull_min, bot_v)
+                        bull_max := na(bull_max) ? top_v : math.max(bull_max, top_v)
+
+                if is_break_dn
+                    array.set(buy_lock_arr, i, true)
+                    if current_role != "RESISTANCE"
+                        array.set(zone_role, i, "RESISTANCE")
+                        bear_count += 1
+                        bear_min := na(bear_min) ? bot_v : math.min(bear_min, bot_v)
+                        bear_max := na(bear_max) ? top_v : math.max(bear_max, top_v)
+
+                array.set(zone_states,     i, "IDLE")
+                array.set(freeze_main,     i, false)
+                array.set(buy_reinforced,  i, false)
+                array.set(sell_reinforced, i, false)
+
+        //==================================================
+        // 🛰️ تجميع كسور MTF (تنبيه واحد لكل فريم بدل تكرار)
+        //==================================================
+        if en_15m and new_m15
+            if not na(m15_prev) and not na(m15_close)
+                if m15_prev <= top_v and m15_close > top_v
+                    m15_up_cnt += 1
+                    m15_up_min := na(m15_up_min) ? bot_v : math.min(m15_up_min, bot_v)
+                    m15_up_max := na(m15_up_max) ? top_v : math.max(m15_up_max, top_v)
+                if m15_prev >= bot_v and m15_close < bot_v
+                    m15_dn_cnt += 1
+                    m15_dn_min := na(m15_dn_min) ? bot_v : math.min(m15_dn_min, bot_v)
+                    m15_dn_max := na(m15_dn_max) ? top_v : math.max(m15_dn_max, top_v)
+
+        if en_1h and new_h1
+            if not na(h1_prev) and not na(h1_close)
+                if h1_prev <= top_v and h1_close > top_v
+                    h1_up_cnt += 1
+                    h1_up_min := na(h1_up_min) ? bot_v : math.min(h1_up_min, bot_v)
+                    h1_up_max := na(h1_up_max) ? top_v : math.max(h1_up_max, top_v)
+                if h1_prev >= bot_v and h1_close < bot_v
+                    h1_dn_cnt += 1
+                    h1_dn_min := na(h1_dn_min) ? bot_v : math.min(h1_dn_min, bot_v)
+                    h1_dn_max := na(h1_dn_max) ? top_v : math.max(h1_dn_max, top_v)
+
+        if en_4h and new_h4
+            if not na(h4_prev) and not na(h4_close)
+                if h4_prev <= top_v and h4_close > top_v
+                    h4_up_cnt += 1
+                    h4_up_min := na(h4_up_min) ? bot_v : math.min(h4_up_min, bot_v)
+                    h4_up_max := na(h4_up_max) ? top_v : math.max(h4_up_max, top_v)
+                if h4_prev >= bot_v and h4_close < bot_v
+                    h4_dn_cnt += 1
+                    h4_dn_min := na(h4_dn_min) ? bot_v : math.min(h4_dn_min, bot_v)
+                    h4_dn_max := na(h4_dn_max) ? top_v : math.max(h4_dn_max, top_v)
+
+        //==================================================
+        // 🎯 اللمسات
+        //==================================================
+        touch_top = not zone_broken_this_bar and (high >= top_v - offset and low <= top_v + offset)
+        touch_bot = not zone_broken_this_bar and (low  <= bot_v + offset and high >= bot_v - offset)
+
+        //==================================================
+        // 🔴 البيع
+        //==================================================
+        if (current_role == "RESISTANCE" or current_role == "NEUTRAL") and touch_top and not frozen and state != "SELLING" and trade_allowed and not lock_sell
+            array.set(zone_states,     i, "SELLING")
+            array.set(freeze_main,     i, true)
+            array.set(sell_reinforced, i, false)
+            array.set(last_trade_bar,  i, bar_index)
+            alert("🔴 بيع [ " + f_num(bot_v) + " ]", alert.freq_once_per_bar)
+
+        else if (current_role == "RESISTANCE" or current_role == "NEUTRAL") and touch_top and state == "SELLING" and not array.get(sell_reinforced, i) and not lock_sell
+            array.set(sell_reinforced, i, true)
+            alert("🟥 تعزيز بيع [ " + f_num(top_v) + " ]", alert.freq_once_per_bar)
+
+        //==================================================
+        // 🟢 الشراء
+        //==================================================
+        if (current_role == "SUPPORT" or current_role == "NEUTRAL") and touch_bot and not frozen and state != "BUYING" and trade_allowed and not lock_buy
+            array.set(zone_states,    i, "BUYING")
+            array.set(freeze_main,    i, true)
+            array.set(buy_reinforced, i, false)
+            array.set(last_trade_bar, i, bar_index)
+            alert("🟢 شراء [ " + f_num(top_v) + " ]", alert.freq_once_per_bar)
+
+        else if (current_role == "SUPPORT" or current_role == "NEUTRAL") and touch_bot and state == "BUYING" and not array.get(buy_reinforced, i) and not lock_buy
+            array.set(buy_reinforced, i, true)
+            alert("🟩 تعزيز شراء [ " + f_num(bot_v) + " ]", alert.freq_once_per_bar)
+
+        //==================================================
+        // 🎨 الرسم (لون يعتمد على الـ Role)
+        //==================================================
+        if barstate.islast
+
+            bx_ref = array.get(boxes,  i)
+            lb_ref = array.get(labels, i)
+
+            role_i = array.get(zone_role, i)
+            f_col  = role_i == "SUPPORT"    ? lower_c :
+                     role_i == "RESISTANCE" ? upper_c :
+                     (bot_v > close ? upper_c : lower_c)
+
+            right_p = bar_index + extend_right
+
+            box.set_left(bx_ref,  bar_index - 500)
+            box.set_right(bx_ref, right_p)
+            box.set_top(bx_ref,    top_v)
+            box.set_bottom(bx_ref, bot_v)
+            box.set_bgcolor(bx_ref,      f_col)
+            box.set_border_color(bx_ref, color.new(f_col, 40))
+
+            label.set_x(lb_ref, right_p + label_off)
+            label.set_y(lb_ref, mid_v)
+            label.set_text(lb_ref, "[ " + f_num(bot_v) + " ⟶ " + f_num(top_v) + " ]")
+            label.set_style(lb_ref,     label.style_label_center)
+            label.set_size(lb_ref,      size.normal)
+            label.set_color(lb_ref,     color.new(f_col, 15))
+            label.set_textcolor(lb_ref, color.black)
+
+//==================================================
+// 📢 تنبيهات الكسر الرئيسي (مجمعة)
+//==================================================
+if barstate.isconfirmed
+
+    if bull_count > 0
+        alert(
+             (bull_count > 1 ? "⚡⬆️ كسر متتالي " : "⚡ كسر ")
+             + "🟢 [ " + f_num(bull_min) + " ⟶ " + f_num(bull_max) + " ]",
+             alert.freq_once_per_bar_close)
+
+    if bear_count > 0
+        alert(
+             (bear_count > 1 ? "⚡⬇️ كسر متتالي " : "⚡ كسر ")
+             + "🔴 [ " + f_num(bear_min) + " ⟶ " + f_num(bear_max) + " ]",
+             alert.freq_once_per_bar_close)
+
+//==================================================
+// 📢 تنبيهات MTF (مجمعة - تنبيه واحد لكل فريم لكل اتجاه)
+//==================================================
+if en_15m and new_m15
+    if m15_up_cnt > 0
+        alert((m15_up_cnt > 1 ? "⚡⬆️ كسر M15 متتالي 🟢 [ " : "⚡🟢 كسر M15 [ ")
+             + f_num(m15_up_min) + " ⟶ " + f_num(m15_up_max) + " ]",
+             alert.freq_once_per_bar_close)
+    if m15_dn_cnt > 0
+        alert((m15_dn_cnt > 1 ? "⚡⬇️ كسر M15 متتالي 🔴 [ " : "⚡🔴 كسر M15 [ ")
+             + f_num(m15_dn_min) + " ⟶ " + f_num(m15_dn_max) + " ]",
+             alert.freq_once_per_bar_close)
+
+if en_1h and new_h1
+    if h1_up_cnt > 0
+        alert((h1_up_cnt > 1 ? "⚡⬆️ كسر H1 متتالي 🟢 [ " : "⚡🟢 كسر H1 [ ")
+             + f_num(h1_up_min) + " ⟶ " + f_num(h1_up_max) + " ]",
+             alert.freq_once_per_bar_close)
+    if h1_dn_cnt > 0
+        alert((h1_dn_cnt > 1 ? "⚡⬇️ كسر H1 متتالي 🔴 [ " : "⚡🔴 كسر H1 [ ")
+             + f_num(h1_dn_min) + " ⟶ " + f_num(h1_dn_max) + " ]",
+             alert.freq_once_per_bar_close)
+
+if en_4h and new_h4
+    if h4_up_cnt > 0
+        alert((h4_up_cnt > 1 ? "🚀⬆️ كسر H4 متتالي 🟢 [ " : "🚀🟢 كسر H4 [ ")
+             + f_num(h4_up_min) + " ⟶ " + f_num(h4_up_max) + " ]",
+             alert.freq_once_per_bar_close)
+    if h4_dn_cnt > 0
+        alert((h4_dn_cnt > 1 ? "🚀⬇️ كسر H4 متتالي 🔴 [ " : "🚀🔴 كسر H4 [ ")
+             + f_num(h4_dn_min) + " ⟶ " + f_num(h4_dn_max) + " ]",
+             alert.freq_once_per_bar_close)
