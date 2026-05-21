@@ -220,10 +220,17 @@ for i = 0 to 9
                 frozen := false
                 armed  := false
 
-        // Dynamic Reclaim — إعادة تفعيل إذا لُمست منطقة أخرى
+        // PATCH C — Dynamic Reclaim: مقارنة سعرية حقيقية بدلاً من ترتيب الـ array
+        // المنطق الصحيح: إذا كنا في BUYING وتم لمس منطقة سعرها أعلى → reclaim
+        // إذا كنا في SELLING وتم لمس منطقة سعرها أسفل → reclaim
         for j = 0 to 9
             if j != i and array.get(hit_zones, j)
-                if (state == "BUYING" and j > i) or (state == "SELLING" and j < i)
+                float j_top = math.max(array.get(tp_arr, j), array.get(bt_arr, j))
+                float j_bot = math.min(array.get(tp_arr, j), array.get(bt_arr, j))
+                bool j_is_above = j_bot > top_v   // منطقة j أعلى سعراً من منطقة i
+                bool j_is_below = j_top < bot_v   // منطقة j أسفل سعراً من منطقة i
+                if (state == "BUYING"  and j_is_above) or
+                   (state == "SELLING" and j_is_below)
                     array.set(zone_states,     i, "IDLE")
                     array.set(freeze_main,     i, false)
                     array.set(buy_reinforced,  i, false)
@@ -269,50 +276,71 @@ for i = 0 to 9
                 state  := "IDLE"
                 frozen := false
 
-        // ✅ PATCH 6 — MTF Breaks: تجميع M15
+        // PATCH A — MTF Breaks: تجميع M15
+        // إصلاح: break_state يُصفَّر عند الكسر العكسي لإعادة السماح بكسر متكرر بنفس الاتجاه
         if en_15m and m15_event and not na(m15_prev_r) and not na(m15_close_r)
-            if m15_prev_r <= top_v and m15_close_r > top_v and array.get(break_state_m15, i) != "UP"
-                array.set(break_state_m15, i, "UP")
-                m15_up_cnt += 1
-                m15_up_min := na(m15_up_min) ? bot_v : math.min(m15_up_min, bot_v)
-                m15_up_max := na(m15_up_max) ? top_v : math.max(m15_up_max, top_v)
-            if m15_prev_r >= bot_v and m15_close_r < bot_v and array.get(break_state_m15, i) != "DOWN"
-                array.set(break_state_m15, i, "DOWN")
-                m15_dn_cnt += 1
-                m15_dn_min := na(m15_dn_min) ? bot_v : math.min(m15_dn_min, bot_v)
-                m15_dn_max := na(m15_dn_max) ? top_v : math.max(m15_dn_max, top_v)
+            if m15_prev_r <= top_v and m15_close_r > top_v
+                if array.get(break_state_m15, i) != "UP"
+                    array.set(break_state_m15, i, "UP")
+                    m15_up_cnt += 1
+                    m15_up_min := na(m15_up_min) ? bot_v : math.min(m15_up_min, bot_v)
+                    m15_up_max := na(m15_up_max) ? top_v : math.max(m15_up_max, top_v)
+                // reset DOWN → يسمح بكسر UP مستقبلي بعد عودة السعر
+            else if m15_prev_r >= bot_v and m15_close_r < bot_v
+                if array.get(break_state_m15, i) != "DOWN"
+                    array.set(break_state_m15, i, "DOWN")
+                    m15_dn_cnt += 1
+                    m15_dn_min := na(m15_dn_min) ? bot_v : math.min(m15_dn_min, bot_v)
+                    m15_dn_max := na(m15_dn_max) ? top_v : math.max(m15_dn_max, top_v)
+            else if m15_close_r >= bot_v and m15_close_r <= top_v
+                // السعر عاد داخل المنطقة → reset الحالة لإعادة التسليح
+                array.set(break_state_m15, i, "NONE")
 
-        // ✅ PATCH 6 — تجميع H1
+        // PATCH A — تجميع H1
         if en_1h and h1_event and not na(h1_prev_r) and not na(h1_close_r)
-            if h1_prev_r <= top_v and h1_close_r > top_v and array.get(break_state_h1, i) != "UP"
-                array.set(break_state_h1, i, "UP")
-                h1_up_cnt += 1
-                h1_up_min := na(h1_up_min) ? bot_v : math.min(h1_up_min, bot_v)
-                h1_up_max := na(h1_up_max) ? top_v : math.max(h1_up_max, top_v)
-            if h1_prev_r >= bot_v and h1_close_r < bot_v and array.get(break_state_h1, i) != "DOWN"
-                array.set(break_state_h1, i, "DOWN")
-                h1_dn_cnt += 1
-                h1_dn_min := na(h1_dn_min) ? bot_v : math.min(h1_dn_min, bot_v)
-                h1_dn_max := na(h1_dn_max) ? top_v : math.max(h1_dn_max, top_v)
+            if h1_prev_r <= top_v and h1_close_r > top_v
+                if array.get(break_state_h1, i) != "UP"
+                    array.set(break_state_h1, i, "UP")
+                    h1_up_cnt += 1
+                    h1_up_min := na(h1_up_min) ? bot_v : math.min(h1_up_min, bot_v)
+                    h1_up_max := na(h1_up_max) ? top_v : math.max(h1_up_max, top_v)
+            else if h1_prev_r >= bot_v and h1_close_r < bot_v
+                if array.get(break_state_h1, i) != "DOWN"
+                    array.set(break_state_h1, i, "DOWN")
+                    h1_dn_cnt += 1
+                    h1_dn_min := na(h1_dn_min) ? bot_v : math.min(h1_dn_min, bot_v)
+                    h1_dn_max := na(h1_dn_max) ? top_v : math.max(h1_dn_max, top_v)
+            else if h1_close_r >= bot_v and h1_close_r <= top_v
+                array.set(break_state_h1, i, "NONE")
 
-        // ✅ PATCH 6 — تجميع H4
+        // PATCH A — تجميع H4
         if en_4h and h4_event and not na(h4_prev_r) and not na(h4_close_r)
-            if h4_prev_r <= top_v and h4_close_r > top_v and array.get(break_state_h4, i) != "UP"
-                array.set(break_state_h4, i, "UP")
-                h4_up_cnt += 1
-                h4_up_min := na(h4_up_min) ? bot_v : math.min(h4_up_min, bot_v)
-                h4_up_max := na(h4_up_max) ? top_v : math.max(h4_up_max, top_v)
-            if h4_prev_r >= bot_v and h4_close_r < bot_v and array.get(break_state_h4, i) != "DOWN"
-                array.set(break_state_h4, i, "DOWN")
-                h4_dn_cnt += 1
-                h4_dn_min := na(h4_dn_min) ? bot_v : math.min(h4_dn_min, bot_v)
-                h4_dn_max := na(h4_dn_max) ? top_v : math.max(h4_dn_max, top_v)
+            if h4_prev_r <= top_v and h4_close_r > top_v
+                if array.get(break_state_h4, i) != "UP"
+                    array.set(break_state_h4, i, "UP")
+                    h4_up_cnt += 1
+                    h4_up_min := na(h4_up_min) ? bot_v : math.min(h4_up_min, bot_v)
+                    h4_up_max := na(h4_up_max) ? top_v : math.max(h4_up_max, top_v)
+            else if h4_prev_r >= bot_v and h4_close_r < bot_v
+                if array.get(break_state_h4, i) != "DOWN"
+                    array.set(break_state_h4, i, "DOWN")
+                    h4_dn_cnt += 1
+                    h4_dn_min := na(h4_dn_min) ? bot_v : math.min(h4_dn_min, bot_v)
+                    h4_dn_max := na(h4_dn_max) ? top_v : math.max(h4_dn_max, top_v)
+            else if h4_close_r >= bot_v and h4_close_r <= top_v
+                array.set(break_state_h4, i, "NONE")
 
 
-        // ✅ PATCH 3 — Touch Engine يستخدم state/frozen المحلي فقط (لا قراءة مزدوجة)
-        // state و frozen تم تحديثهما أعلاه محلياً عبر := وليس عبر array.get مرة ثانية
+        // PATCH B — Touch Engine: منع Dual Touch (BUY+SELL على نفس الشمعة)
+        // شمعة تعبر المنطقة كاملاً → touch_top و touch_bot كلاهما true
+        // القاعدة: الأولوية للـ side المقفول
         bool touch_top = not zone_broken_this_bar and (high >= top_v - offset and low <= top_v + offset)
         bool touch_bot = not zone_broken_this_bar and (low  <= bot_v + offset and high >= bot_v - offset)
+
+        // إذا كانت الشمعة تلمس الحدين → نعطي الأولوية للـ side فقط
+        if touch_top and touch_bot
+            touch_top := side == "RES"
+            touch_bot := side == "SUP"
 
         // قراءة role بعد أي تحديث من الكسر
         role_i := array.get(zone_role, i)
