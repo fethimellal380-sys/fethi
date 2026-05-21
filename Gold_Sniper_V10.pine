@@ -42,10 +42,11 @@ bt_arr = array.from(b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
 
 //==================================================
 // 🛰️ بيانات MTF — Anti-Repaint (close[1] + lookahead_on)
+// FIX #5 — حذف open[1] غير المستخدم من جميع طلبات MTF
 //==================================================
-[m15_open_r, m15_close_r, m15_prev_r] = request.security(syminfo.tickerid, "15",  [open[1], close[1], close[2]], lookahead=barmerge.lookahead_on)
-[h1_open_r,  h1_close_r,  h1_prev_r]  = request.security(syminfo.tickerid, "60",  [open[1], close[1], close[2]], lookahead=barmerge.lookahead_on)
-[h4_open_r,  h4_close_r,  h4_prev_r]  = request.security(syminfo.tickerid, "240", [open[1], close[1], close[2]], lookahead=barmerge.lookahead_on)
+[m15_close_r, m15_prev_r] = request.security(syminfo.tickerid, "15",  [close[1], close[2]], lookahead=barmerge.lookahead_on)
+[h1_close_r,  h1_prev_r]  = request.security(syminfo.tickerid, "60",  [close[1], close[2]], lookahead=barmerge.lookahead_on)
+[h4_close_r,  h4_prev_r]  = request.security(syminfo.tickerid, "240", [close[1], close[2]], lookahead=barmerge.lookahead_on)
 
 m15_event = ta.change(time("15"))  != 0
 h1_event  = ta.change(time("60"))  != 0
@@ -200,8 +201,8 @@ for i = 0 to 9
         // ✅ PATCH 4 — Inside Box Rearm يعمل فقط إذا كانت المنطقة سبق أن أطلقت إشارة (frozen)
         // يمنع rearm عبثي على المناطق التي لم تُلمس أصلاً
         if m15_event and frozen
-            float body_top = math.max(m15_open_r, m15_close_r)
-            float body_bot = math.min(m15_open_r, m15_close_r)
+            float body_top = math.max(m15_close_r, m15_prev_r)
+            float body_bot = math.min(m15_close_r, m15_prev_r)
             if body_top <= top_v and body_bot >= bot_v
                 array.set(rearm_armed, i, true)
                 armed := true
@@ -316,8 +317,19 @@ for i = 0 to 9
         // قراءة role بعد أي تحديث من الكسر
         role_i := array.get(zone_role, i)
 
+        // FIX #3 — تحديد اتجاه اللمس الحقيقي للمناطق NEUTRAL
+        // SUP: السعر قادم من فوق (close[1] > top_v أو side == "SUP")
+        // RES: السعر قادم من أسفل (close[1] < bot_v أو side == "RES")
+        bool coming_from_above = side == "SUP"
+        bool coming_from_below = side == "RES"
+
+        // 🔴 SELL — يشترط أن يكون السعر قادماً من أسفل (منطقة مقاومة حقيقية)
+        bool valid_sell_touch = touch_top and (role_i == "RESISTANCE" or (role_i == "NEUTRAL" and coming_from_below))
+        // 🟢 BUY — يشترط أن يكون السعر قادماً من فوق (منطقة دعم حقيقية)
+        bool valid_buy_touch  = touch_bot and (role_i == "SUPPORT"    or (role_i == "NEUTRAL" and coming_from_above))
+
         // 🔴 SELL
-        if (role_i == "RESISTANCE" or role_i == "NEUTRAL") and touch_top and not frozen and state != "SELLING" and trade_ok and not lock_sell
+        if valid_sell_touch and not frozen and state != "SELLING" and trade_ok and not lock_sell
             array.set(zone_states,     i, "SELLING")
             array.set(freeze_main,     i, true)
             array.set(sell_reinforced, i, false)
@@ -328,13 +340,13 @@ for i = 0 to 9
             alert("🔴 بيع [ " + f_num(bot_v) + " ⟶ " + f_num(top_v) + " ]", alert.freq_once_per_bar)
 
         // 🟥 تعزيز بيع — يسمح داخل نفس الشمعة إذا وصل السعر فعلاً
-        else if (role_i == "RESISTANCE" or role_i == "NEUTRAL") and touch_top and state == "SELLING" and not array.get(sell_reinforced, i) and not lock_sell and array.get(last_r_bar, i) != bar_index
+        else if valid_sell_touch and state == "SELLING" and not array.get(sell_reinforced, i) and not lock_sell and array.get(last_r_bar, i) != bar_index
             array.set(sell_reinforced, i, true)
             array.set(last_r_bar,      i, bar_index)
             alert("🟥 تعزيز بيع [ " + f_num(top_v) + " ]", alert.freq_once_per_bar)
 
         // 🟢 BUY
-        if (role_i == "SUPPORT" or role_i == "NEUTRAL") and touch_bot and not frozen and state != "BUYING" and trade_ok and not lock_buy
+        if valid_buy_touch and not frozen and state != "BUYING" and trade_ok and not lock_buy
             array.set(zone_states,    i, "BUYING")
             array.set(freeze_main,    i, true)
             array.set(buy_reinforced, i, false)
@@ -345,7 +357,7 @@ for i = 0 to 9
             alert("🟢 شراء [ " + f_num(bot_v) + " ⟶ " + f_num(top_v) + " ]", alert.freq_once_per_bar)
 
         // 🟩 تعزيز شراء — يسمح داخل نفس الشمعة إذا تعمق السعر فعلاً
-        else if (role_i == "SUPPORT" or role_i == "NEUTRAL") and touch_bot and state == "BUYING" and not array.get(buy_reinforced, i) and not lock_buy and array.get(last_r_bar, i) != bar_index
+        else if valid_buy_touch and state == "BUYING" and not array.get(buy_reinforced, i) and not lock_buy and array.get(last_r_bar, i) != bar_index
             array.set(buy_reinforced, i, true)
             array.set(last_r_bar,     i, bar_index)
             alert("🟩 تعزيز شراء [ " + f_num(bot_v) + " ]", alert.freq_once_per_bar)
