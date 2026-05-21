@@ -90,10 +90,17 @@ if barstate.isnew
         array.set(buy_lock_arr,      i, false)
         array.set(sell_lock_arr,     i, false)
         array.set(hit_zones,         i, false)
-        array.set(zone_broken_live,  i, false)  // ✅ PATCH 5 reset
+        array.set(zone_broken_live,  i, false)
+        // FIX #3 — reset last_m_bar per candle يمنع blockage بعد Dynamic Reclaim
+        array.set(last_m_bar,        i, -1)
 
-    // ✅ PATCH 6 — MTF counters تُصفَّر هنا (isnew) لا عند m15_event/h1_event
-    // هذا يمنع فقدان تنبيهات H1/H4 عند التزامن
+    // FIX #1 — MTF counters Reset الفعلي (كان تعليقاً فقط بدون كود)
+    m15_up_cnt := 0, m15_up_min := na, m15_up_max := na
+    m15_dn_cnt := 0, m15_dn_min := na, m15_dn_max := na
+    h1_up_cnt  := 0, h1_up_min  := na, h1_up_max  := na
+    h1_dn_cnt  := 0, h1_dn_min  := na, h1_dn_max  := na
+    h4_up_cnt  := 0, h4_up_min  := na, h4_up_max  := na
+    h4_dn_cnt  := 0, h4_dn_min  := na, h4_dn_max  := na
 
 //==================================================
 // 🎨 كائنات الرسم
@@ -107,6 +114,14 @@ if barstate.isfirst
         array.set(labels, i, label.new(x=bar_index, y=close, text="",
              xloc=xloc.bar_index, yloc=yloc.price,
              style=label.style_label_center, size=size.normal))
+        // FIX #4 — تهيئة side_arr من اللحظة الأولى لمنع تأخير شمعة
+        if array.get(en_arr, i)
+            float top_v0 = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+            float bot_v0 = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+            if close > top_v0
+                array.set(side_arr, i, "SUP")
+            else if close < bot_v0
+                array.set(side_arr, i, "RES")
 
 //==================================================
 // 🧮 متغيرات تجميع الكسر
@@ -141,7 +156,6 @@ if barstate.isconfirmed
         if array.get(en_arr, i)
             float top_v = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
             float bot_v = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
-            string prev_side = array.get(side_arr, i)
             if close > top_v
                 array.set(side_arr, i, "SUP")
             else if close < bot_v
