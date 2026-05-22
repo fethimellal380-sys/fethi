@@ -148,16 +148,28 @@ live_bar = barstate.isrealtime or barstate.islast
 // H1 و H4 لهما reset مستقل عند إغلاق فريمهم فقط
 // ─────────────────────────────────────────────────
 if m15_ev
-    tk.up_count := 0, tk.up_min := na, tk.up_max := na
-    tk.dn_count := 0, tk.dn_min := na, tk.dn_max := na
+    tk.up_count := 0
+    tk.up_min   := na
+    tk.up_max   := na
+    tk.dn_count := 0
+    tk.dn_min   := na
+    tk.dn_max   := na
 
 if h1_ev
-    tk.h1_up_cnt := 0, tk.h1_up_min := na, tk.h1_up_max := na
-    tk.h1_dn_cnt := 0, tk.h1_dn_min := na, tk.h1_dn_max := na
+    tk.h1_up_cnt := 0
+    tk.h1_up_min := na
+    tk.h1_up_max := na
+    tk.h1_dn_cnt := 0
+    tk.h1_dn_min := na
+    tk.h1_dn_max := na
 
 if h4_ev
-    tk.h4_up_cnt := 0, tk.h4_up_min := na, tk.h4_up_max := na
-    tk.h4_dn_cnt := 0, tk.h4_dn_min := na, tk.h4_dn_max := na
+    tk.h4_up_cnt := 0
+    tk.h4_up_min := na
+    tk.h4_up_max := na
+    tk.h4_dn_cnt := 0
+    tk.h4_dn_min := na
+    tk.h4_dn_max := na
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 01 — Box Engine
@@ -298,11 +310,13 @@ f_reset(Zone z, bool cur_m, bool cur_r) =>
             float body_top = math.max(m15_o, m15_c)
             // SUP فُشلت: جزء من جسم M15 أسفل bot
             if z.side == "SUP" and body_bot < z.bot_v
-                nm := false, nr := false
+                nm := false
+                nr := false
                 z.side := "RES"   // ✅ تحويل فوري — الانتقال السريع
             // RES فُشلت: جزء من جسم M15 فوق top
             if z.side == "RES" and body_top > z.top_v
-                nm := false, nr := false
+                nm := false
+                nr := false
                 z.side := "SUP"   // ✅ تحويل فوري
     [nm, nr]
 
@@ -448,17 +462,21 @@ f_run(Zone z, bool cm, bool cr) =>
     if z.enabled
         // 1. Reset أولاً (Standard Failure + Side Flip)
         [nm2, nr2] = f_reset(z, nm, nr)
-        nm := nm2, nr := nr2
+        nm := nm2
+        nr := nr2
 
         // 2. Reclaim — فحص كل المناطق الأخرى بالسعر
         for _z in array.from(zone1,zone2,zone3,zone4,zone5,zone6,zone7,zone8,zone9,zone10)
             [nm3, nr3] = f_reclaim(z, _z, nm, nr)
-            nm := nm3, nr := nr3
+            nm := nm3
+            nr := nr3
 
         // 3. Touch — فقط على الشمعة الحية (لا نريد تنبيهات على التاريخ)
         if live_bar
             [nm4, nr4, msg4] = f_touch(z, offset, nm, nr)
-            nm := nm4, nr := nr4, msg := msg4
+            nm  := nm4
+            nr  := nr4
+            msg := msg4
 
         // 4. Engines 03 + 04
         f_break_m15(z)
@@ -476,34 +494,54 @@ f_run(Zone z, bool cm, bool cr) =>
 string alert_buf = ""
 
 [o_m1,  o_r1,  msg1]  = f_run(zone1,  m1,  r1)
-m1  := o_m1,  r1  := o_r1,  alert_buf := alert_buf + msg1
+m1  := o_m1
+r1  := o_r1
+alert_buf := alert_buf + msg1
 
 [o_m2,  o_r2,  msg2]  = f_run(zone2,  m2,  r2)
-m2  := o_m2,  r2  := o_r2,  alert_buf := alert_buf + msg2
+m2  := o_m2
+r2  := o_r2
+alert_buf := alert_buf + msg2
 
 [o_m3,  o_r3,  msg3]  = f_run(zone3,  m3,  r3)
-m3  := o_m3,  r3  := o_r3,  alert_buf := alert_buf + msg3
+m3  := o_m3
+r3  := o_r3
+alert_buf := alert_buf + msg3
 
 [o_m4,  o_r4,  msg4]  = f_run(zone4,  m4,  r4)
-m4  := o_m4,  r4  := o_r4,  alert_buf := alert_buf + msg4
+m4  := o_m4
+r4  := o_r4
+alert_buf := alert_buf + msg4
 
 [o_m5,  o_r5,  msg5]  = f_run(zone5,  m5,  r5)
-m5  := o_m5,  r5  := o_r5,  alert_buf := alert_buf + msg5
+m5  := o_m5
+r5  := o_r5
+alert_buf := alert_buf + msg5
 
 [o_m6,  o_r6,  msg6]  = f_run(zone6,  m6,  r6)
-m6  := o_m6,  r6  := o_r6,  alert_buf := alert_buf + msg6
+m6  := o_m6
+r6  := o_r6
+alert_buf := alert_buf + msg6
 
 [o_m7,  o_r7,  msg7]  = f_run(zone7,  m7,  r7)
-m7  := o_m7,  r7  := o_r7,  alert_buf := alert_buf + msg7
+m7  := o_m7
+r7  := o_r7
+alert_buf := alert_buf + msg7
 
 [o_m8,  o_r8,  msg8]  = f_run(zone8,  m8,  r8)
-m8  := o_m8,  r8  := o_r8,  alert_buf := alert_buf + msg8
+m8  := o_m8
+r8  := o_r8
+alert_buf := alert_buf + msg8
 
 [o_m9,  o_r9,  msg9]  = f_run(zone9,  m9,  r9)
-m9  := o_m9,  r9  := o_r9,  alert_buf := alert_buf + msg9
+m9  := o_m9
+r9  := o_r9
+alert_buf := alert_buf + msg9
 
 [o_m10, o_r10, msg10] = f_run(zone10, m10, r10)
-m10 := o_m10, r10 := o_r10, alert_buf := alert_buf + msg10
+m10 := o_m10
+r10 := o_r10
+alert_buf := alert_buf + msg10
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 06 — Final Alert Engine
