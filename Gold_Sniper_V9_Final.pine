@@ -276,30 +276,35 @@ f_reclaim(Zone z, Zone other, bool cur_m, bool cur_r) =>
     [nm, nr]
 
 // ─────────────────────────────────────────────────
-// ✅ FIX #4 — Reset: Standard Failure + Side Flip
-// يعمل على كل الشمعات (ليس live_bar فقط)
+// ✅ FIX A — Standard Failure: جزء من جسم M15 يخترق
+// ✅ FIX C — تحويل side فوراً عند الكسر (انتقال سريع)
 // ─────────────────────────────────────────────────
 f_reset(Zone z, bool cur_m, bool cur_r) =>
     bool nm = cur_m
     bool nr = cur_r
     if z.enabled
-        // Side Flip — السعر كسر المنطقة وغيّر الاتجاه
-        if z.side == "SUP" and close < z.bot_v
-            nm := false, nr := false
-        if z.side == "RES" and close > z.top_v
-            nm := false, nr := false
-        // Standard Failure — M15 close خارج المنطقة
-        if m15_ev and not na(m15_c)
-            if z.side == "SUP" and m15_c < z.bot_v
+        // Standard Failure — جزء من جسم M15 يخترق المنطقة
+        // المطلوب: body_bot < bot (وليس m15_c < bot)
+        if m15_ev and not na(m15_c) and not na(m15_o)
+            float body_bot = math.min(m15_o, m15_c)
+            float body_top = math.max(m15_o, m15_c)
+            // SUP فُشلت: جزء من جسم M15 أسفل bot
+            if z.side == "SUP" and body_bot < z.bot_v
                 nm := false, nr := false
-            if z.side == "RES" and m15_c > z.top_v
+                z.side := "RES"   // ✅ تحويل فوري — الانتقال السريع
+            // RES فُشلت: جزء من جسم M15 فوق top
+            if z.side == "RES" and body_top > z.top_v
                 nm := false, nr := false
+                z.side := "SUP"   // ✅ تحويل فوري
     [nm, nr]
 
 // ─────────────────────────────────────────────────
-// ✅ FIX #3 + FIX #4 — Touch Engine
-// يعمل على كل الشمعات
-// Reset أولاً ثم Touch (لا تنبيه مزدوج)
+// ✅ FIX (الأهم) — Touch Engine — منطق صحيح حسب الاستراتيجية:
+//   🟢 شراء: لمس Top (low <= top_v) — السعر قادم من فوق
+//   🟩 تعزيز شراء: تعمق لـ Bot (low <= bot_v)
+//   🔴 بيع: لمس Bot (high >= bot_v) — السعر قادم من تحت
+//   🟥 تعزيز بيع: صعود لـ Top (high >= top_v)
+// ✅ شمعة كبيرة تلمس الحدين → شراء + تعزيز في نفس الشمعة (بدون else if)
 // ─────────────────────────────────────────────────
 f_touch(Zone z, float p_off, bool cur_m, bool cur_r) =>
     bool   nm  = cur_m
@@ -307,30 +312,27 @@ f_touch(Zone z, float p_off, bool cur_m, bool cur_r) =>
     string msg = ""
 
     if z.enabled and not z.zone_broken and z.side != "NONE"
-        // Dual Touch Fix: إذا لمست الشمعة الحدين → الأولوية للـ side
-        bool t_top = high >= z.top_v - p_off and low <= z.top_v + p_off
-        bool t_bot = low  <= z.bot_v + p_off and high >= z.bot_v - p_off
-        if t_top and t_bot
-            t_top := z.side == "RES"
-            t_bot := z.side == "SUP"
-
-        // 🟢 BUY Pipeline
+        // 🟢 BUY Pipeline — السعر فوق المنطقة
         if z.side == "SUP" and not nr
-            if not nm and t_bot
+            // لمس Top = شراء أول
+            if not nm and (low <= z.top_v + p_off)
                 nm  := true
                 msg := "🟢 شراء [ " + f_num(z.bot_v) + " ⟶ " + f_num(z.top_v) + " ]\n"
-            else if nm and t_bot
+            // تعمق إلى Bot = تعزيز شراء (يمكن في نفس الشمعة الكبيرة)
+            if nm and not nr and (low <= z.bot_v + p_off)
                 nr  := true
-                msg := "🟩 تعزيز شراء [ " + f_num(z.bot_v) + " ]\n"
+                msg := msg + "🟩 تعزيز شراء [ " + f_num(z.bot_v) + " ]\n"
 
-        // 🔴 SELL Pipeline
+        // 🔴 SELL Pipeline — السعر تحت المنطقة
         else if z.side == "RES" and not nr
-            if not nm and t_top
+            // لمس Bot = بيع أول
+            if not nm and (high >= z.bot_v - p_off)
                 nm  := true
                 msg := "🔴 بيع [ " + f_num(z.bot_v) + " ⟶ " + f_num(z.top_v) + " ]\n"
-            else if nm and t_top
+            // صعود إلى Top = تعزيز بيع (يمكن في نفس الشمعة الكبيرة)
+            if nm and not nr and (high >= z.top_v - p_off)
                 nr  := true
-                msg := "🟥 تعزيز بيع [ " + f_num(z.top_v) + " ]\n"
+                msg := msg + "🟥 تعزيز بيع [ " + f_num(z.top_v) + " ]\n"
 
     [nm, nr, msg]
 
