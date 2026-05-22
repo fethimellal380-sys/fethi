@@ -29,28 +29,24 @@ type Zone
 
 // ─────────────────────────────────────────────────
 // 📦 UDT — BreakTracker
+// ✅ FIX #3: نخزن نطاقات المناطق المكسورة كـ string بدل [min,max]
+//   النتيجة: "[3290→3300] [3000→3010]" بدل نطاق واحد مضلل
 // ─────────────────────────────────────────────────
 type BreakTracker
-    int   up_count
-    float up_start
-    float up_end
-    int   dn_count
-    float dn_start
-    float dn_end
-    // ✅ FIX #5: H1 tracker مستقل — يُصفَّر فقط عند h1_ev
-    int   h1_up_cnt
-    float h1_up_start
-    float h1_up_end
-    int   h1_dn_cnt
-    float h1_dn_start
-    float h1_dn_end
-    // H4 tracker مستقل — يُصفَّر فقط عند h4_ev
-    int   h4_up_cnt
-    float h4_up_start
-    float h4_up_end
-    int   h4_dn_cnt
-    float h4_dn_start
-    float h4_dn_end
+    int    up_count
+    string up_zones
+    int    dn_count
+    string dn_zones
+    // H1 tracker
+    int    h1_up_cnt
+    string h1_up_zones
+    int    h1_dn_cnt
+    string h1_dn_zones
+    // H4 tracker
+    int    h4_up_cnt
+    string h4_up_zones
+    int    h4_dn_cnt
+    string h4_dn_zones
 
 // ─────────────────────────────────────────────────
 // 🔒 varip — حماية الأقفال من Rollback
@@ -92,7 +88,7 @@ var Zone zone8  = Zone.new(na,na,na,"8",  false,"NONE","NONE","NONE","NONE",fals
 var Zone zone9  = Zone.new(na,na,na,"9",  false,"NONE","NONE","NONE","NONE",false,na,na)
 var Zone zone10 = Zone.new(na,na,na,"10", false,"NONE","NONE","NONE","NONE",false,na,na)
 
-var BreakTracker tk = BreakTracker.new(0,na,na,0,na,na,0,na,na,0,na,na,0,na,na,0,na,na)
+var BreakTracker tk = BreakTracker.new(0,"",0,"",0,"",0,"",0,"",0,"")
 
 // ─────────────────────────────────────────────────
 // ⚙️ إعدادات المستخدم
@@ -145,16 +141,16 @@ live_bar = barstate.isrealtime or barstate.islast
 // H1 و H4 لهما reset مستقل عند إغلاق فريمهم فقط
 // ─────────────────────────────────────────────────
 if m15_ev
-    tk.up_count := 0, tk.up_start := na, tk.up_end := na
-    tk.dn_count := 0, tk.dn_start := na, tk.dn_end := na
+    tk.up_count := 0, tk.up_zones := ""
+    tk.dn_count := 0, tk.dn_zones := ""
 
 if h1_ev
-    tk.h1_up_cnt := 0, tk.h1_up_start := na, tk.h1_up_end := na
-    tk.h1_dn_cnt := 0, tk.h1_dn_start := na, tk.h1_dn_end := na
+    tk.h1_up_cnt := 0, tk.h1_up_zones := ""
+    tk.h1_dn_cnt := 0, tk.h1_dn_zones := ""
 
 if h4_ev
-    tk.h4_up_cnt := 0, tk.h4_up_start := na, tk.h4_up_end := na
-    tk.h4_dn_cnt := 0, tk.h4_dn_start := na, tk.h4_dn_end := na
+    tk.h4_up_cnt := 0, tk.h4_up_zones := ""
+    tk.h4_dn_cnt := 0, tk.h4_dn_zones := ""
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 01 — Box Engine
@@ -216,6 +212,11 @@ f_update_side(Zone z) =>
             z.side := "RES"
         // داخل البوكس → يحتفظ بـ side السابق
 
+// ─────────────────────────────────────────────────
+// ✅ FIX #1 — مزامنة Side قبل f_run
+// نضمن أن side محدّث على آخر close قبل أي معالجة في f_run
+// (f_reset قد يحول side فوراً عند الكسر — هذا له أولوية)
+// ─────────────────────────────────────────────────
 if conf_bar
     f_update_side(zone1)
     f_update_side(zone2)
@@ -299,12 +300,14 @@ f_reset(Zone z, bool cur_m, bool cur_r) =>
     [nm, nr]
 
 // ─────────────────────────────────────────────────
-// ✅ FIX (الأهم) — Touch Engine — منطق صحيح حسب الاستراتيجية:
+// ✅ FIX #2 — Touch Engine — إشارة واحدة لكل شمعة (الأقرب)
+//   منطق صحيح حسب الاستراتيجية:
 //   🟢 شراء: لمس Top (low <= top_v) — السعر قادم من فوق
 //   🟩 تعزيز شراء: تعمق لـ Bot (low <= bot_v)
 //   🔴 بيع: لمس Bot (high >= bot_v) — السعر قادم من تحت
 //   🟥 تعزيز بيع: صعود لـ Top (high >= top_v)
 // ✅ شمعة كبيرة تلمس الحدين → شراء + تعزيز في نفس الشمعة (بدون else if)
+// ✅ FIX #2: إشارة واحدة لكل منطقة في الشمعة (لا تتكرر بين شمعات إذا nm/nr=true)
 // ─────────────────────────────────────────────────
 f_touch(Zone z, float p_off, bool cur_m, bool cur_r) =>
     bool   nm  = cur_m
@@ -338,6 +341,7 @@ f_touch(Zone z, float p_off, bool cur_m, bool cur_r) =>
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 03 — Break Engine M15
+// ✅ FIX #3: نخزن نطاق كل منطقة مكسورة بشكل صريح
 // ─────────────────────────────────────────────────
 f_break_m15(Zone z) =>
     if z.enabled and m15_ev and not na(m15_o) and not na(m15_c)
@@ -348,17 +352,15 @@ f_break_m15(Zone z) =>
         else if bt > z.top_v and z.break_state != "UP"
             z.break_state := "UP"
             tk.up_count   += 1
-            tk.up_start   := na(tk.up_start) ? z.bot_v : math.min(tk.up_start, z.bot_v)
-            tk.up_end     := na(tk.up_end)   ? z.top_v : math.max(tk.up_end,   z.top_v)
+            tk.up_zones   := tk.up_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
         else if bb < z.bot_v and z.break_state != "DOWN"
             z.break_state := "DOWN"
             tk.dn_count   += 1
-            tk.dn_start   := na(tk.dn_start) ? z.top_v : math.max(tk.dn_start, z.top_v)
-            tk.dn_end     := na(tk.dn_end)   ? z.bot_v : math.min(tk.dn_end,   z.bot_v)
+            tk.dn_zones   := tk.dn_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 04 — MTF H1
-// ✅ FIX #5: يُجمع كسور ساعة كاملة — tk.h1 يُصفَّر فقط عند h1_ev
+// ✅ FIX #5: يُجمع كسور ساعة كاملة + ✅ FIX #3: نطاق كل منطقة بشكل صريح
 // ─────────────────────────────────────────────────
 f_mtf_h1(Zone z) =>
     if z.enabled and h1_ev and not na(h1_o) and not na(h1_c)
@@ -369,16 +371,15 @@ f_mtf_h1(Zone z) =>
         else if bt > z.top_v and z.h1_state != "UP"
             z.h1_state     := "UP"
             tk.h1_up_cnt   += 1
-            tk.h1_up_start := na(tk.h1_up_start) ? z.bot_v : math.min(tk.h1_up_start, z.bot_v)
-            tk.h1_up_end   := na(tk.h1_up_end)   ? z.top_v : math.max(tk.h1_up_end,   z.top_v)
+            tk.h1_up_zones := tk.h1_up_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
         else if bb < z.bot_v and z.h1_state != "DOWN"
             z.h1_state     := "DOWN"
             tk.h1_dn_cnt   += 1
-            tk.h1_dn_start := na(tk.h1_dn_start) ? z.top_v : math.max(tk.h1_dn_start, z.top_v)
-            tk.h1_dn_end   := na(tk.h1_dn_end)   ? z.bot_v : math.min(tk.h1_dn_end,   z.bot_v)
+            tk.h1_dn_zones := tk.h1_dn_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 04 — MTF H4
+// ✅ FIX #3: نطاق كل منطقة بشكل صريح
 // ─────────────────────────────────────────────────
 f_mtf_h4(Zone z) =>
     if z.enabled and h4_ev and not na(h4_o) and not na(h4_c)
@@ -389,13 +390,11 @@ f_mtf_h4(Zone z) =>
         else if bt > z.top_v and z.h4_state != "UP"
             z.h4_state     := "UP"
             tk.h4_up_cnt   += 1
-            tk.h4_up_start := na(tk.h4_up_start) ? z.bot_v : math.min(tk.h4_up_start, z.bot_v)
-            tk.h4_up_end   := na(tk.h4_up_end)   ? z.top_v : math.max(tk.h4_up_end,   z.top_v)
+            tk.h4_up_zones := tk.h4_up_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
         else if bb < z.bot_v and z.h4_state != "DOWN"
             z.h4_state     := "DOWN"
             tk.h4_dn_cnt   += 1
-            tk.h4_dn_start := na(tk.h4_dn_start) ? z.top_v : math.max(tk.h4_dn_start, z.top_v)
-            tk.h4_dn_end   := na(tk.h4_dn_end)   ? z.bot_v : math.min(tk.h4_dn_end,   z.bot_v)
+            tk.h4_dn_zones := tk.h4_dn_zones + " [" + f_num(z.bot_v) + "→" + f_num(z.top_v) + "]"
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 05 — Draw Engine
@@ -495,10 +494,8 @@ m10 := o_m10, r10 := o_r10, alert_buf := alert_buf + msg10
 
 // ─────────────────────────────────────────────────
 // 🏗️ ENGINE 06 — Final Alert Engine
-// تنبيهات اللمس: live_bar فقط
-// تنبيهات الكسر M15: عند m15_ev (bar close)
-// ✅ FIX #5: تنبيهات H1 عند h1_ev — مجمعة لساعة كاملة
-// تنبيهات H4: عند h4_ev
+// ✅ FIX #3: عرض كل منطقة مكسورة بشكل صريح بدل [min,max]
+//   النتيجة: "كسر متتالي M15 🟢 [3290→3300] [3000→3010]"
 // ─────────────────────────────────────────────────
 
 // Touch Alerts
@@ -506,44 +503,44 @@ if live_bar and alert_buf != "" and time != last_alert_time
     last_alert_time := time
     alert(alert_buf, alert.freq_once_per_bar)
 
-// M15 Break Alerts
+// M15 Break Alerts — كل منطقة مكسورة معروضة منفصلة
 if m15_ev
     string brk = ""
     if tk.up_count == 1
-        brk += "⚡⬆️ كسر M15 🟢 [ " + f_num(tk.up_start) + " ⟶ " + f_num(tk.up_end) + " ]\n"
+        brk += "⚡⬆️ كسر M15 🟢" + tk.up_zones + "\n"
     else if tk.up_count > 1
-        brk += "⚡⏫ كسر متتالي M15 🟢 [ " + f_num(tk.up_start) + " ⟶ " + f_num(tk.up_end) + " ]\n"
+        brk += "⚡⏫ كسر متتالي M15 🟢" + tk.up_zones + "\n"
     if tk.dn_count == 1
-        brk += "⚡⬇️ كسر M15 🔴 [ " + f_num(tk.dn_start) + " ⟶ " + f_num(tk.dn_end) + " ]\n"
+        brk += "⚡⬇️ كسر M15 🔴" + tk.dn_zones + "\n"
     else if tk.dn_count > 1
-        brk += "⚡⏬ كسر متتالي M15 🔴 [ " + f_num(tk.dn_start) + " ⟶ " + f_num(tk.dn_end) + " ]\n"
+        brk += "⚡⏬ كسر متتالي M15 🔴" + tk.dn_zones + "\n"
     if brk != ""
         alert(brk, alert.freq_once_per_bar_close)
 
-// ✅ FIX #5 — H1 Break Alerts — مجمعة لساعة كاملة
+// ✅ FIX #5 — H1 Break Alerts — مجمعة لساعة كاملة + كل منطقة منفصلة
 if h1_ev
     string h1m = ""
     if tk.h1_up_cnt == 1
-        h1m += "⚡⬆️ كسر H1 🟢 [ " + f_num(tk.h1_up_start) + " ⟶ " + f_num(tk.h1_up_end) + " ]\n"
+        h1m += "⚡⬆️ كسر H1 🟢" + tk.h1_up_zones + "\n"
     else if tk.h1_up_cnt > 1
-        h1m += "⚡⏫ كسر متتالي H1 🟢 [ " + f_num(tk.h1_up_start) + " ⟶ " + f_num(tk.h1_up_end) + " ]\n"
+        h1m += "⚡⏫ كسر متتالي H1 🟢" + tk.h1_up_zones + "\n"
     if tk.h1_dn_cnt == 1
-        h1m += "⚡⬇️ كسر H1 🔴 [ " + f_num(tk.h1_dn_start) + " ⟶ " + f_num(tk.h1_dn_end) + " ]\n"
+        h1m += "⚡⬇️ كسر H1 🔴" + tk.h1_dn_zones + "\n"
     else if tk.h1_dn_cnt > 1
-        h1m += "⚡⏬ كسر متتالي H1 🔴 [ " + f_num(tk.h1_dn_start) + " ⟶ " + f_num(tk.h1_dn_end) + " ]\n"
+        h1m += "⚡⏬ كسر متتالي H1 🔴" + tk.h1_dn_zones + "\n"
     if h1m != ""
         alert(h1m, alert.freq_once_per_bar_close)
 
-// H4 Break Alerts
+// H4 Break Alerts — كل منطقة منفصلة
 if h4_ev
     string h4m = ""
     if tk.h4_up_cnt == 1
-        h4m += "🚀⬆️ كسر H4 🟢 [ " + f_num(tk.h4_up_start) + " ⟶ " + f_num(tk.h4_up_end) + " ]\n"
+        h4m += "🚀⬆️ كسر H4 🟢" + tk.h4_up_zones + "\n"
     else if tk.h4_up_cnt > 1
-        h4m += "🚀⏫ كسر متتالي H4 🟢 [ " + f_num(tk.h4_up_start) + " ⟶ " + f_num(tk.h4_up_end) + " ]\n"
+        h4m += "🚀⏫ كسر متتالي H4 🟢" + tk.h4_up_zones + "\n"
     if tk.h4_dn_cnt == 1
-        h4m += "🚀⬇️ كسر H4 🔴 [ " + f_num(tk.h4_dn_start) + " ⟶ " + f_num(tk.h4_dn_end) + " ]\n"
+        h4m += "🚀⬇️ كسر H4 🔴" + tk.h4_dn_zones + "\n"
     else if tk.h4_dn_cnt > 1
-        h4m += "🚀⏬ كسر متتالي H4 🔴 [ " + f_num(tk.h4_dn_start) + " ⟶ " + f_num(tk.h4_dn_end) + " ]\n"
+        h4m += "🚀⏬ كسر متتالي H4 🔴" + tk.h4_dn_zones + "\n"
     if h4m != ""
         alert(h4m, alert.freq_once_per_bar_close)
