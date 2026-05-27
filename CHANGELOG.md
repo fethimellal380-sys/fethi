@@ -27,6 +27,42 @@
    - **الأثر:** لو TP أو SL أغلق الصفقة في نفس الشمعة، لن يحاول time-stop إعادة الإغلاق.
    - **يمنع:** duplicate close execution + تنبيهات `⏰` مكرّرة + إعادة تنفيذ التنظيف على arrays نظيفة.
 
+### 🛡️ V12.2 Final Patch — 3 Production Stability Fixes (مدمجة في نفس الملف)
+
+طُبِّقت بعد V12.1 لتعزيز الاستقرار الإنتاجي. كل إصلاح موسوم بـ `// V12-HARDEN#N`.
+
+4. **HARDEN#6 — MTF Fetch Hardening**
+   - `request.security` لم يعد يُستدعى على فريمات > M15.
+   - حارس defensive يكمّل `V11.1-GUARD` العلوي (الذي يطلق `runtime.error`).
+   ```pine
+   bool valid_tf = timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
+   float m15_close_r = na, float m15_high_r = na, float m15_low_r = na
+   if valid_tf
+       [m15_close_r, m15_high_r, m15_low_r] := request.security(...)
+   ```
+   - **يمنع:** hidden runtime overhead من استدعاء `request.security` على فريم غير مدعوم.
+
+5. **HARDEN#2 Refined — Realtime Stats Updated**
+   - تم تحديث الـ 6 stat counters من `barstate.isrealtime` إلى:
+     ```pine
+     if barstate.islastconfirmedhistory or barstate.isrealtime
+     ```
+   - **الأثر:** يُحتسب آخر بار تاريخي مؤكَّد + كل البارات الحيّة. لا يُحتسب بقية التاريخ.
+   - **النتيجة:** التقاط الإحداث الأحدث (الذي حدث قبل لحظات من فتح الشارت) بالإضافة إلى ما بعد التحميل، بدون تضخّم من إعادة التشغيل التاريخي الكامل.
+
+6. **HARDEN#4 — Snapshot Refresh Before Visual Rendering**
+   - تحديث `start_bar`, `tp2_c`, `sl_c` المحلّية مباشرة قبل قسم الرسم البصري:
+     ```pine
+     // V12-HARDEN#4: تحديث snapshot بعد lifecycle cleanup أو touch engine
+     start_bar := array.get(overlay_bar, i)
+     tp2_c     := array.get(active_tp2, i)
+     sl_c      := array.get(active_sl, i)
+     ```
+   - **السبب:** الـ locals تُلتقط في رأس الإطار، لكن TP/SL/TIME-STOP و Touch Engine يعدّلون الـ arrays الأصلية لاحقاً، فتصبح الـ locals stale عند الوصول للـ rendering.
+   - **يمنع:**
+     - **Ghost overlays** — رسم Box/Line بـ `start_bar` قديم بعد فتح صفقة جديدة في نفس الإطار.
+     - **Stale rendering frame** — موضع الرسم القديم بعد إغلاق صفقة وإعادة فتح أخرى.
+
 ### ⚠️ ضمان عدم التغيير
 
 - ✅ Touch logic — لم يُلمس
