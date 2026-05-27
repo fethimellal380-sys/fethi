@@ -102,13 +102,24 @@ f_tp2_sell(float c_bot, array<bool> en, array<float> top_a, array<float> bot_a) 
     n_tp
 
 //==================================================
-// 🛰️ بيانات MTF — M15 Fetch (Close, High, Low)
+// 🛰️ بيانات MTF — M15 Fetch (Close, High, Low) — HARDENED PRODUCTION VERSION
 //==================================================
 // V11-FIX#1: إزالة لاج 15 دقيقة الناتج عن دمج [1] + lookahead_off.
 // النمط الصحيح للحصول على آخر شمعة M15 مُغلقة بدون repaint وبدون لاج إضافي
 // هو close+lookahead_off (بدون [1]). المرجع: Pine v5 Anti-Repaint Best Practices.
 // V11-FIX#2: m15_open_r محذوف — كان dead variable لا يُستخدم في أي شرط.
-[m15_close_r, m15_high_r, m15_low_r] = request.security(syminfo.tickerid, "15", [close, high, low], lookahead=barmerge.lookahead_off)
+// V12-HARDEN#6: منع تنفيذ request.security على فريمات غير مدعومة (> M15)
+// لتقليل execution load ومنع hidden runtime overhead. حارس defensive يكمّل
+// V11.1-GUARD العلوي (runtime.error) — defense-in-depth.
+bool valid_tf = timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
+
+float m15_close_r = na
+float m15_high_r  = na
+float m15_low_r   = na
+
+if valid_tf
+    [m15_close_r, m15_high_r, m15_low_r] := request.security(syminfo.tickerid, "15", [close, high, low], lookahead=barmerge.lookahead_off)
+
 m15_event = ta.change(time("15")) != 0
 
 //==================================================
@@ -202,8 +213,8 @@ for i = 0 to 9
             if not na(tp2_c) and not na(sl_c)
                 if low <= sl_c
                     alert("🛑 STOP LOSS BUY Z" + str.tostring(i + 1) + " @ " + f_num(sl_c), alert.freq_once_per_bar)
-                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي — يمنع تضخّم العدّاد عند إعادة تحميل الشارت أو replay.
-                    if barstate.isrealtime
+                    // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                    if barstate.islastconfirmedhistory or barstate.isrealtime
                         stat_buy_sl += 1
                     array.set(active_buy_overlay, i, false)
                     array.set(has_rebuy, i, false)
@@ -212,8 +223,8 @@ for i = 0 to 9
                     array.set(overlay_bar, i, na)
                 else if high >= tp2_c
                     alert("🎯 TAKE PROFIT BUY Z" + str.tostring(i + 1) + " @ " + f_num(tp2_c), alert.freq_once_per_bar)
-                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
-                    if barstate.isrealtime
+                    // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                    if barstate.islastconfirmedhistory or barstate.isrealtime
                         stat_buy_tp += 1
                     array.set(active_buy_overlay, i, false)
                     array.set(has_rebuy, i, false)
@@ -225,8 +236,8 @@ for i = 0 to 9
             if not na(tp2_c) and not na(sl_c)
                 if high >= sl_c
                     alert("🛑 STOP LOSS SELL Z" + str.tostring(i + 1) + " @ " + f_num(sl_c), alert.freq_once_per_bar)
-                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
-                    if barstate.isrealtime
+                    // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                    if barstate.islastconfirmedhistory or barstate.isrealtime
                         stat_sell_sl += 1
                     array.set(active_sell_overlay, i, false)
                     array.set(has_resell, i, false)
@@ -235,8 +246,8 @@ for i = 0 to 9
                     array.set(overlay_bar, i, na)
                 else if low <= tp2_c
                     alert("🎯 TAKE PROFIT SELL Z" + str.tostring(i + 1) + " @ " + f_num(tp2_c), alert.freq_once_per_bar)
-                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
-                    if barstate.isrealtime
+                    // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                    if barstate.islastconfirmedhistory or barstate.isrealtime
                         stat_sell_tp += 1
                     array.set(active_sell_overlay, i, false)
                     array.set(has_resell, i, false)
@@ -254,13 +265,13 @@ for i = 0 to 9
             bool was_sell = array.get(active_sell_overlay, i)
             if was_buy
                 alert("⏰ TIME-STOP BUY Z" + str.tostring(i + 1), alert.freq_once_per_bar)
-                // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
-                if barstate.isrealtime
+                // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                if barstate.islastconfirmedhistory or barstate.isrealtime
                     stat_buy_timestop += 1
             if was_sell
                 alert("⏰ TIME-STOP SELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
-                // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
-                if barstate.isrealtime
+                // V12-HARDEN#2: عدّ الإحصائيات على آخر بار تاريخي مؤكَّد + البار الحي.
+                if barstate.islastconfirmedhistory or barstate.isrealtime
                     stat_sell_timestop += 1
             array.set(active_buy_overlay, i, false)
             array.set(active_sell_overlay, i, false)
@@ -349,6 +360,14 @@ for i = 0 to 9
             alert("🟥 RESELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
 
         // ===== 🎨 VISUAL RENDERING =====
+        // V12-HARDEN#4: تحديث snapshot بعد lifecycle cleanup (TP/SL/TIME-STOP) أو
+        // بعد touch engine (الذي يفتح صفقة جديدة ويعيّن overlay_bar=bar_index).
+        // الـ locals كانت ملتقَطة في رأس الإطار وقد أصبحت stale. التحديث هنا يمنع
+        // ghost overlays أو stale rendering frame.
+        start_bar := array.get(overlay_bar, i)
+        tp2_c     := array.get(active_tp2, i)
+        sl_c      := array.get(active_sl, i)
+
         if should_redraw
             box bx_ref = array.get(boxes, i)
             color f_col = close < bot_v ? sell_c : (close > top_v ? buy_c : neut_c)
