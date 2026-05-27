@@ -387,71 +387,53 @@ if m15_event
         alert("🔴 " + sell_arrows + " BREAK DOWN [ " + f_num(last_sell_bot) + " - " + f_num(first_sell_top) + " ]", alert.freq_once_per_bar_close)
 
 //==================================================
-// ☁️ GOLD SNIPER CLOUD ENGINE (Fixed)
-// Institutional Smart Visual Layer
+// ☁️ INSTITUTIONAL CLOUD ENGINE (Hybrid: Stable Pool + User Inputs + LastBar Guard)
 //==================================================
 grp_cloud      = "☁️ Institutional Cloud"
 show_clouds    = input.bool(true,                       "تفعيل السحابة المؤسسية", group=grp_cloud)
 buy_cloud_col  = input.color(color.new(#10B981, 88),    "سحابة الشراء",            group=grp_cloud)
 sell_cloud_col = input.color(color.new(#EF4444, 88),    "سحابة البيع",             group=grp_cloud)
 
-// مراجع دائمة لكل من lines + linefills
-var line     buy_top_ln  = na
-var line     buy_bot_ln  = na
-var linefill buy_fill    = na
+// كائنات السحابة الدائمة (Object Pool — تُنشأ مرة واحدة فقط)
+var line     buy_cloud_top  = na
+var line     buy_cloud_bot  = na
+var line     sell_cloud_top = na
+var line     sell_cloud_bot = na
+var linefill buy_cloud_fill  = na
+var linefill sell_cloud_fill = na
 
-var line     sell_top_ln = na
-var line     sell_bot_ln = na
-var linefill sell_fill   = na
+if barstate.isfirst
+    buy_cloud_top   := line.new(na, na, na, na, color=color(na), extend=extend.right)
+    buy_cloud_bot   := line.new(na, na, na, na, color=color(na), extend=extend.right)
+    buy_cloud_fill  := linefill.new(buy_cloud_top, buy_cloud_bot, color(na))
 
-// ===== ☁️ سحابة الشراء =====
-if barstate.islast and show_clouds and consecutive_buy_count > 0 and not na(first_buy_bot) and not na(last_buy_top) and not na(buy_trend_start_bar)
-    // حذف الكائنات السابقة لتفادي التراكم
-    if not na(buy_top_ln)
-        line.delete(buy_top_ln)
-    if not na(buy_bot_ln)
-        line.delete(buy_bot_ln)
-    if not na(buy_fill)
-        linefill.delete(buy_fill)
+    sell_cloud_top  := line.new(na, na, na, na, color=color(na), extend=extend.right)
+    sell_cloud_bot  := line.new(na, na, na, na, color=color(na), extend=extend.right)
+    sell_cloud_fill := linefill.new(sell_cloud_top, sell_cloud_bot, color(na))
 
-    // ضمان ترتيب صحيح حتى لو حصل خلل في الحساب
-    float top_y = math.max(first_buy_bot, last_buy_top)
-    float bot_y = math.min(first_buy_bot, last_buy_top)
+// Render فقط على آخر بار (متّسق مع V10's should_redraw)
+if barstate.islast
+    // ===== ☁️ سحابة الشراء =====
+    if show_clouds and consecutive_buy_count > 0 and not na(buy_trend_start_bar) and not na(first_buy_bot) and not na(last_buy_top)
+        // ضمان ترتيب صحيح للخطوط (دفاعي)
+        float top_y = math.max(first_buy_bot, last_buy_top)
+        float bot_y = math.min(first_buy_bot, last_buy_top)
+        line.set_xy1(buy_cloud_top, buy_trend_start_bar, top_y)
+        line.set_xy2(buy_cloud_top, bar_index,           top_y)
+        line.set_xy1(buy_cloud_bot, buy_trend_start_bar, bot_y)
+        line.set_xy2(buy_cloud_bot, bar_index,           bot_y)
+        linefill.set_color(buy_cloud_fill, buy_cloud_col)
+    else
+        linefill.set_color(buy_cloud_fill, color(na))
 
-    buy_top_ln := line.new(buy_trend_start_bar, top_y, bar_index, top_y, extend=extend.right, color=color.new(#10B981, 60), width=1)
-    buy_bot_ln := line.new(buy_trend_start_bar, bot_y, bar_index, bot_y, extend=extend.right, color=color.new(#10B981, 60), width=1)
-    buy_fill   := linefill.new(buy_top_ln, buy_bot_ln, buy_cloud_col)
-
-// تنظيف صريح عند انتهاء الترند الصاعد
-if consecutive_buy_count == 0 and not na(buy_top_ln)
-    line.delete(buy_top_ln)
-    line.delete(buy_bot_ln)
-    linefill.delete(buy_fill)
-    buy_top_ln := na
-    buy_bot_ln := na
-    buy_fill   := na
-
-// ===== ☁️ سحابة البيع =====
-if barstate.islast and show_clouds and consecutive_sell_count > 0 and not na(first_sell_top) and not na(last_sell_bot) and not na(sell_trend_start_bar)
-    if not na(sell_top_ln)
-        line.delete(sell_top_ln)
-    if not na(sell_bot_ln)
-        line.delete(sell_bot_ln)
-    if not na(sell_fill)
-        linefill.delete(sell_fill)
-
-    float top_y = math.max(first_sell_top, last_sell_bot)
-    float bot_y = math.min(first_sell_top, last_sell_bot)
-
-    sell_top_ln := line.new(sell_trend_start_bar, top_y, bar_index, top_y, extend=extend.right, color=color.new(#EF4444, 60), width=1)
-    sell_bot_ln := line.new(sell_trend_start_bar, bot_y, bar_index, bot_y, extend=extend.right, color=color.new(#EF4444, 60), width=1)
-    sell_fill   := linefill.new(sell_top_ln, sell_bot_ln, sell_cloud_col)
-
-// تنظيف صريح عند انتهاء الترند الهابط
-if consecutive_sell_count == 0 and not na(sell_top_ln)
-    line.delete(sell_top_ln)
-    line.delete(sell_bot_ln)
-    linefill.delete(sell_fill)
-    sell_top_ln := na
-    sell_bot_ln := na
-    sell_fill   := na
+    // ===== ☁️ سحابة البيع =====
+    if show_clouds and consecutive_sell_count > 0 and not na(sell_trend_start_bar) and not na(first_sell_top) and not na(last_sell_bot)
+        float top_y = math.max(first_sell_top, last_sell_bot)
+        float bot_y = math.min(first_sell_top, last_sell_bot)
+        line.set_xy1(sell_cloud_top, sell_trend_start_bar, top_y)
+        line.set_xy2(sell_cloud_top, bar_index,            top_y)
+        line.set_xy1(sell_cloud_bot, sell_trend_start_bar, bot_y)
+        line.set_xy2(sell_cloud_bot, bar_index,            bot_y)
+        linefill.set_color(sell_cloud_fill, sell_cloud_col)
+    else
+        linefill.set_color(sell_cloud_fill, color(na))

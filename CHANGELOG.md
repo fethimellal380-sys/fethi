@@ -4,35 +4,38 @@
 
 ملف جديد `Gold_Sniper_V10.pine` بمعمارية مختلفة عن V202: تركيز على **دورة حياة الصفقة** على M15 (TP1/TP2 ديناميكي + SL + REBUY/RESELL) بدلاً من تنبيهات MTF متعددة.
 
-### ☁️ إصلاحات Cloud Engine الحرجة
+### ☁️ Cloud Engine — نسخة هجينة (Stable Pool + User Inputs + LastBar Guard)
 
-1. **منع تسريب linefill**
-   - الكود الأصلي كان يستدعي `linefill.new(...)` في كل بار بدون حفظ مرجع → تجاوز الحد (50) خلال دقائق.
-   - الحل: مراجع `var linefill buy_fill` و `var linefill sell_fill` مع نمط delete-then-create.
+النسخة النهائية تجمع أفضل ما في النمطين:
 
-2. **تصريح `max_linefills_count=10`**
-   - مضاف في `indicator(...)` لضمان عدم تجاوز الحد الافتراضي.
+1. **Object Pool المستقر** (إنشاء مرة واحدة في `barstate.isfirst`)
+   - 4 خطوط + 2 linefills طوال عمر السكربت — لا تسريب، لا حذف، لا إعادة إنشاء.
+   - مطابق لنمط V10 الأصلي مع `boxes` و `entry_lines`.
 
-3. **تتبّع بار بداية الترند**
-   - إضافة `var int buy_trend_start_bar` و `var int sell_trend_start_bar`.
-   - يُلتقط عند عبور `consecutive_count` من 0 → ≥1.
-   - النتيجة: السحابة تمتد فعلياً من بداية الترند لآخره (بدلاً من شريط رفيع عند الحافة اليمنى).
+2. **inputs المستخدم محفوظة**
+   - `show_clouds` toggle.
+   - `buy_cloud_col` و `sell_cloud_col` كـ inputs قابلة للتعديل.
+   - اللون يُسند في الـ render (عبر `linefill.set_color`)، ليس وقت الإنشاء → **يقبل التغيير المباشر من إعدادات المؤشر**.
 
-4. **تنظيف صريح عند انتهاء الترند**
-   - عند `consecutive_count == 0`: حذف الـ lines والـ linefill وإعادة المراجع لـ `na`.
-   - السحابة تختفي بصرياً بدلاً من البقاء معلّقة.
+3. **`barstate.islast` guard**
+   - الرسم على آخر بار فقط، متّسق مع `should_redraw` في V10.
+   - يمنع آلاف استدعاءات `set_xy1/2` على البارات التاريخية.
 
-5. **حصر الرسم بـ `barstate.islast`**
-   - متّسق مع نمط V10 الأصلي (`should_redraw`).
-   - يمنع آلاف عمليات الرسم على البارات التاريخية.
+4. **`extend=extend.right` على إنشاء الخطوط**
+   - الخط يمتد للأمام تلقائياً، لا حاجة لتحديث `xy2` على البار المستقبلي.
 
-6. **مسح بار بداية الترند المعاكس عند الانعكاس**
-   - عند كسر شراء جديد: `sell_trend_start_bar := na` (والعكس).
-   - يضمن عدم بقاء سحابة قديمة من ترند معكوس.
+5. **إخفاء كنسي عبر `linefill.set_color(... color(na))`**
+   - بدلاً من `set_xy1(na, na)` (نمط ضمني غير موثّق).
 
-7. **حماية ترتيب الـ linefill**
-   - `math.max/math.min` على `first_buy_bot` و `last_buy_top` قبل تمريرها للخطوط.
-   - يمنع `linefill` المقلوب لو حصل خلل في الحساب.
+6. **حماية ترتيب linefill** (`math.max/min` على top/bot).
+
+### 🔧 تعديلات نواة V10 لدعم السحابة
+
+- إضافة `var int buy_trend_start_bar` و `sell_trend_start_bar`.
+- التقاط `bar_index` عند عبور `consecutive_count` من 0 → ≥1.
+- مسح بداية الترند المعاكس عند الانعكاس.
+- مسح بداية الترند عند تصفير العدّاد في حالة "NONE".
+- تصريح `max_linefills_count=10` في `indicator(...)`.
 
 ### ⚠️ ملاحظات
 
