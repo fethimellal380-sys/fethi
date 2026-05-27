@@ -1,5 +1,60 @@
 # Gold Sniper - سجل التغييرات
 
+## V12 - Institutional Dashboard Edition
+
+ملف جديد `Gold_Sniper_V12.pine` = V11 (Core-Fixed + V11.1 Hardened) + **Live Dashboard + Trade Statistics**. صفر تغيير في منطق V11 — كل الإضافات قراءة فقط.
+
+### 📊 Live Institutional Dashboard
+
+لوحة `table` واحدة في الزاوية المختارة، تعرض في الوقت الحقيقي:
+
+1. **حالة الترند الحالي** — `🟢 UP × N` / `🔴 DOWN × N` / `⚪ NEUTRAL` (مع عدّاد الكسور المتتالية).
+2. **نطاق الترند** — `first_bot → last_top` (للصاعد) أو `first_top → last_bot` (للهابط).
+3. **الصفقات النشطة** — عدد صفقات الشراء والبيع المفتوحة حالياً (مجموع `active_*_overlay` عبر المناطق).
+4. **إحصائيات BUY**: 🎯 TP / 🛑 SL / ⏰ Time-Stop / Win Rate %
+5. **إحصائيات SELL**: 🎯 TP / 🛑 SL / ⏰ Time-Stop / Win Rate %
+
+### 📈 Trade Statistics (Persistent Counters)
+
+6 عدّادات `var int` جديدة تُزاد فقط في فروع إغلاق الصفقات الموجودة في V11:
+
+| العدّاد | يُزاد عند |
+|---|---|
+| `stat_buy_tp` | TAKE PROFIT BUY |
+| `stat_buy_sl` | STOP LOSS BUY |
+| `stat_buy_timestop` | TIME-STOP على صفقة شراء |
+| `stat_sell_tp` | TAKE PROFIT SELL |
+| `stat_sell_sl` | STOP LOSS SELL |
+| `stat_sell_timestop` | TIME-STOP على صفقة بيع |
+
+**حساب Win Rate:** `(stat_*_tp / (tp + sl + timestop)) × 100` — Pine يحسبه live بدون تخزين.
+
+### 🎨 Inputs الجديدة (مجموعة "📊 Dashboard")
+
+- `show_dash` (bool) — إظهار/إخفاء اللوحة.
+- `dash_pos_in` (string) — 6 خيارات للموضع (top_left/right, middle_left/right, bottom_left/right).
+- `dash_size` (string) — 5 أحجام خط (tiny → huge).
+- `dash_bg` / `dash_txt` / `dash_buy_c` / `dash_sell_c` — تخصيص ألوان.
+
+### ⚠️ ملاحظات تقنية
+
+- **Pine v5 لا يدعم `table.set_position`** — تغيير `dash_pos_in` يتطلب إعادة تحميل المؤشر.
+- **حد الجداول:** Pine v5 = 4 افتراضياً، V12 يستخدم 1. ✅ آمن.
+- **DNA preservation:** لا تغييرات على touch/break/lifecycle/cloud logic إطلاقاً.
+- **Object Pool:** اللوحة تُنشأ مرة واحدة في `barstate.isfirst`، تُحدَّث عبر `table.cell` على `barstate.islast`.
+- **Performance:** صفر تأثير على البارات التاريخية (الـ render مغلق على `barstate.islast and show_dash`).
+
+### 🏛 الحالة الإنتاجية
+
+| النسخة | الحالة |
+|---|---|
+| V202 | MTF alerts (موجود مسبقاً) |
+| V10  | Original + Cloud Engine |
+| V11  | V10 + 8 إصلاحات نواة + V11.1 hardening |
+| **V12** | **V11 + Live Dashboard + Trade Stats** |
+
+---
+
 ## V11 - Core-Fixed Institutional Edition
 
 ملف `Gold_Sniper_V11.pine` = V10 (Cloud-Fixed) + 8 إصلاحات نواة + 5 توصيات من المراجعة المعمارية المؤسسية. كل إصلاح موسوم بـ `// V11-FIX#N` أو `// V11.1-GUARD` في الكود لسهولة التتبّع.
