@@ -4,6 +4,39 @@
 
 ملف جديد `Gold_Sniper_V12.pine` = V11 (Core-Fixed + V11.1 Hardened) + **Live Dashboard + Trade Statistics**. صفر تغيير في منطق V11 — كل الإضافات قراءة فقط.
 
+### 🛡️ V12.1 Hardening — 3 Targeted Protection Fixes (مدمجة في نفس الملف)
+
+كل إصلاح موسوم بـ `// V12-HARDEN#N` في الكود لسهولة التتبّع.
+
+1. **HARDEN#1 — Dashboard Guard (توثيق صريح)**
+   - `table.new` يُستدعى مرة واحدة فقط في `barstate.isfirst`.
+   - `table.cell` يُحدَّث فقط في `barstate.islast`.
+   - تعليق توثيقي مضاف فوق `var table dash` يؤكّد عدم وجود `table.new` متكرر.
+
+2. **HARDEN#2 — Realtime Statistics Protection**
+   - كل الـ 6 stat counters (`stat_buy_tp/sl/timestop` و `stat_sell_tp/sl/timestop`) أصبحت محصورة داخل `if barstate.isrealtime`.
+   - **الأثر:** العدّادات لا تُزاد على البارات التاريخية أو أثناء replay/reload، تبدأ من 0 عند كل تحميل.
+   - **النتيجة:** الإحصائيات في اللوحة تعكس فقط الصفقات الفعلية بعد آخر تحميل، بدون تضخّم.
+
+3. **HARDEN#3 — TimeStop Hardening**
+   - شرط time-stop أصبح يتطلب أيضاً وجود صفقة نشطة:
+     ```pine
+     if not na(start_bar) and (bar_index - start_bar) > time_stop_bars
+        and (array.get(active_buy_overlay, i) or array.get(active_sell_overlay, i))
+     ```
+   - **الأثر:** لو TP أو SL أغلق الصفقة في نفس الشمعة، لن يحاول time-stop إعادة الإغلاق.
+   - **يمنع:** duplicate close execution + تنبيهات `⏰` مكرّرة + إعادة تنفيذ التنظيف على arrays نظيفة.
+
+### ⚠️ ضمان عدم التغيير
+
+- ✅ Touch logic — لم يُلمس
+- ✅ Break engine — لم يُلمس
+- ✅ Alerts (شروط الإطلاق) — لم تُلمس
+- ✅ TP/SL behavior — لم يُلمس
+- ✅ Visual architecture — لم يُلمس
+- ✅ Non-repaint integrity — محفوظ
+- ✅ Trade lifecycle — لم يُلمس
+
 ### 📊 Live Institutional Dashboard
 
 لوحة `table` واحدة في الزاوية المختارة، تعرض في الوقت الحقيقي:
