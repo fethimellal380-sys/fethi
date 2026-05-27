@@ -202,7 +202,9 @@ for i = 0 to 9
             if not na(tp2_c) and not na(sl_c)
                 if low <= sl_c
                     alert("🛑 STOP LOSS BUY Z" + str.tostring(i + 1) + " @ " + f_num(sl_c), alert.freq_once_per_bar)
-                    stat_buy_sl += 1  // V12: stats counter
+                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي — يمنع تضخّم العدّاد عند إعادة تحميل الشارت أو replay.
+                    if barstate.isrealtime
+                        stat_buy_sl += 1
                     array.set(active_buy_overlay, i, false)
                     array.set(has_rebuy, i, false)
                     array.set(active_tp2, i, na)
@@ -210,7 +212,9 @@ for i = 0 to 9
                     array.set(overlay_bar, i, na)
                 else if high >= tp2_c
                     alert("🎯 TAKE PROFIT BUY Z" + str.tostring(i + 1) + " @ " + f_num(tp2_c), alert.freq_once_per_bar)
-                    stat_buy_tp += 1  // V12: stats counter
+                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
+                    if barstate.isrealtime
+                        stat_buy_tp += 1
                     array.set(active_buy_overlay, i, false)
                     array.set(has_rebuy, i, false)
                     array.set(active_tp2, i, na)
@@ -221,7 +225,9 @@ for i = 0 to 9
             if not na(tp2_c) and not na(sl_c)
                 if high >= sl_c
                     alert("🛑 STOP LOSS SELL Z" + str.tostring(i + 1) + " @ " + f_num(sl_c), alert.freq_once_per_bar)
-                    stat_sell_sl += 1  // V12: stats counter
+                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
+                    if barstate.isrealtime
+                        stat_sell_sl += 1
                     array.set(active_sell_overlay, i, false)
                     array.set(has_resell, i, false)
                     array.set(active_tp2, i, na)
@@ -229,7 +235,9 @@ for i = 0 to 9
                     array.set(overlay_bar, i, na)
                 else if low <= tp2_c
                     alert("🎯 TAKE PROFIT SELL Z" + str.tostring(i + 1) + " @ " + f_num(tp2_c), alert.freq_once_per_bar)
-                    stat_sell_tp += 1  // V12: stats counter
+                    // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
+                    if barstate.isrealtime
+                        stat_sell_tp += 1
                     array.set(active_sell_overlay, i, false)
                     array.set(has_resell, i, false)
                     array.set(active_tp2, i, na)
@@ -238,15 +246,22 @@ for i = 0 to 9
 
         // ===== ⏰ TIME EXPIRATION (مع تنبيه — لم يعد صامتاً) =====
         // V11-FIX#4: استخدام time_stop_bars (منفصل عن extend_right) + تنبيه عند التفعيل.
-        if not na(start_bar) and (bar_index - start_bar) > time_stop_bars
+        // V12-HARDEN#3: حماية من duplicate close execution — تشغيل time-stop فقط إذا
+        //               لا تزال صفقة نشطة. (TP/SL في الكتلة أعلاه قد يكون أغلقها في نفس
+        //               الشمعة، فلا داعي لإعادة تنفيذ التنظيف وإطلاق تنبيه ⏰ مكرّر.)
+        if not na(start_bar) and (bar_index - start_bar) > time_stop_bars and (array.get(active_buy_overlay, i) or array.get(active_sell_overlay, i))
             bool was_buy  = array.get(active_buy_overlay, i)
             bool was_sell = array.get(active_sell_overlay, i)
             if was_buy
                 alert("⏰ TIME-STOP BUY Z" + str.tostring(i + 1), alert.freq_once_per_bar)
-                stat_buy_timestop += 1  // V12: stats counter
+                // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
+                if barstate.isrealtime
+                    stat_buy_timestop += 1
             if was_sell
                 alert("⏰ TIME-STOP SELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
-                stat_sell_timestop += 1  // V12: stats counter
+                // V12-HARDEN#2: عدّ الإحصائيات فقط على البار الحي.
+                if barstate.isrealtime
+                    stat_sell_timestop += 1
             array.set(active_buy_overlay, i, false)
             array.set(active_sell_overlay, i, false)
             array.set(has_rebuy, i, false)
@@ -570,7 +585,8 @@ f_size(string s) =>
      s == "normal" ? size.normal :
      s == "large"  ? size.large  : size.huge
 
-// كائن اللوحة الدائم (Object Pool — إنشاء واحد فقط بموضع المستخدم)
+// V12-HARDEN#1: Dashboard Guard — table.new يُستدعى مرة واحدة فقط في barstate.isfirst.
+// تحديث الخلايا فقط في barstate.islast (انظر الكتلة التحتية). ممنوع table.new متكرر.
 // ملاحظة: Pine v5 لا يدعم set_position بعد الإنشاء. تغيير موضع اللوحة يتطلب إعادة
 // تحميل المؤشر (Add to Chart مرة أخرى).
 var table dash = na
