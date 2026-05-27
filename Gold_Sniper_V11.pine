@@ -4,7 +4,32 @@ indicator("Gold Sniper V11 - Core-Fixed Institutional Edition", overlay=true, ma
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  V11 = V10 (Cloud-Fixed) + 8 إصلاحات نواة                          ║
 // ║  تفاصيل كل إصلاح موسومة بـ // V11-FIX#N في الكود.                  ║
+// ╠══════════════════════════════════════════════════════════════════╣
+// ║  📌 ARCHITECTURAL NOTES (Institutional Review v1):                  ║
+// ║                                                                    ║
+// ║  1. ALERT MODEL: نظام هجين متعمَّد.                                  ║
+// ║     • BREAK UP/DOWN  → freq_once_per_bar_close  (مؤكَّد، non-repaint) ║
+// ║     • BUY/SELL TOUCH → freq_once_per_bar        (intra-bar live)    ║
+// ║     • REBUY/RESELL   → freq_once_per_bar        (intra-bar live)    ║
+// ║     • SL/TP/TIMESTOP → freq_once_per_bar        (intra-bar live)    ║
+// ║                                                                    ║
+// ║  2. TRADE vs ZONE STATE: مستقلّان تماماً.                            ║
+// ║     صفقة مفتوحة لا تُغلَق بسبب تغيّر حالة المنطقة (UP→DOWN/NONE).      ║
+// ║     الإغلاق فقط على: TP أو SL أو time_stop_bars.                    ║
+// ║                                                                    ║
+// ║  3. last_buy_top / last_sell_bot: دلالة "ذروة الترند".              ║
+// ║     تُحدَّث بـ math.max / math.min عبر كامل الترند، ليس "آخر زمنياً".  ║
+// ║     • last_buy_top  = أعلى قمة منطقة كُسرت في الترند الصاعد           ║
+// ║     • last_sell_bot = أدنى قاع منطقة كُسرت في الترند الهابط           ║
+// ║                                                                    ║
+// ║  4. TIMEFRAME REQUIREMENT: يجب ≤ M15.                              ║
+// ║     على H1+: 75% من شموع M15 تُهمَل لأن request.security يعيد فقط    ║
+// ║     آخر شمعة M15 مغلقة. حارس runtime مفعّل أدناه.                    ║
 // ╚══════════════════════════════════════════════════════════════════╝
+
+// 🛡️ V11.1-GUARD: حماية Timeframe — يمنع التشغيل على فريمات > M15.
+if barstate.isfirst and timeframe.in_seconds(timeframe.period) > timeframe.in_seconds("15")
+    runtime.error("⛔ Gold Sniper V11 مصمَّم للتشغيل على M15 أو أقل. الفريم الحالي يضيع 75%+ من بيانات الكسر.")
 
 //==================================================
 // ⚙️ الإعدادات العامة
@@ -404,9 +429,14 @@ if m15_event
         // مسح ذاكرة ترند البيع تماماً
         first_sell_top := na
         last_sell_bot  := na
+        // 🛡️ V11.1-GUARD: سقف ناعم على عدد الأسهم في رسالة التنبيه (لا يؤثر على المنطق).
+        // يحمي من تجاوز حد TradingView لطول الرسالة (~4096 char) عند re-breaks متكررة.
         string buy_arrows = ""
-        for k = 1 to consecutive_buy_count
+        int buy_arrows_n = math.min(consecutive_buy_count, 30)
+        for k = 1 to buy_arrows_n
             buy_arrows := buy_arrows + "⏫"
+        if consecutive_buy_count > 30
+            buy_arrows := buy_arrows + "+" + str.tostring(consecutive_buy_count - 30)
         alert("🟢 " + buy_arrows + " BREAK UP [ " + f_num(first_buy_bot) + " - " + f_num(last_buy_top) + " ]", alert.freq_once_per_bar_close)
 
     if new_sell_breaks > 0
@@ -418,9 +448,13 @@ if m15_event
         // مسح ذاكرة ترند الشراء تماماً
         first_buy_bot := na
         last_buy_top  := na
+        // 🛡️ V11.1-GUARD: سقف ناعم على عدد الأسهم (نفس منطق buy أعلاه).
         string sell_arrows = ""
-        for k = 1 to consecutive_sell_count
+        int sell_arrows_n = math.min(consecutive_sell_count, 30)
+        for k = 1 to sell_arrows_n
             sell_arrows := sell_arrows + "⏬"
+        if consecutive_sell_count > 30
+            sell_arrows := sell_arrows + "+" + str.tostring(consecutive_sell_count - 30)
         alert("🔴 " + sell_arrows + " BREAK DOWN [ " + f_num(last_sell_bot) + " - " + f_num(first_sell_top) + " ]", alert.freq_once_per_bar_close)
 
 //==================================================

@@ -2,7 +2,32 @@
 
 ## V11 - Core-Fixed Institutional Edition
 
-ملف جديد `Gold_Sniper_V11.pine` = V10 (Cloud-Fixed) + 8 إصلاحات نواة طُرحت في تحليل V10. كل إصلاح موسوم بـ `// V11-FIX#N` في الكود لسهولة التتبّع.
+ملف `Gold_Sniper_V11.pine` = V10 (Cloud-Fixed) + 8 إصلاحات نواة + 5 توصيات من المراجعة المعمارية المؤسسية. كل إصلاح موسوم بـ `// V11-FIX#N` أو `// V11.1-GUARD` في الكود لسهولة التتبّع.
+
+### 🛡️ توصيات المراجعة المعمارية (V11.1 hardening — مدمجة في نفس الملف)
+
+1. **Timeframe Guard (runtime.error)**
+   - حارس على `barstate.isfirst` يمنع التشغيل على H1 أو أعلى.
+   - السبب: `request.security("15", ..., lookahead_off)` على H1 يعيد فقط آخر شمعة M15 من كل 4 → فقدان 75% من بيانات الكسر.
+   - الرسالة: `⛔ Gold Sniper V11 مصمَّم للتشغيل على M15 أو أقل`.
+
+2. **سقف ناعم على Arrows Loop (Soft Cap)**
+   - `math.min(consecutive_count, 30)` في حلقة توليد الـ ⏫/⏬ فقط (لا يؤثر على منطق العدّاد نفسه).
+   - زيادة عن 30 تظهر كـ `⏫⏫⏫...⏫+15` (مثلاً عند العدّ 45).
+   - يحمي من تجاوز حد TradingView لطول رسالة التنبيه (~4096 حرف) عند re-breaks متكررة لنفس المنطقة.
+
+3. **توثيق `last_*` بـ math.max/min**
+   - block توثيق مؤسسي في رأس الملف يوضح أن `last_buy_top` = "ذروة الترند" (math.max عبر كامل الترند) لا "آخر زمنياً".
+
+4. **توثيق Alert Hybrid Model**
+   - block يوضح أن BREAK alerts = bar-close-confirmed (non-repaint)، أما TOUCH/REBUY/RESELL/SL/TP/TIMESTOP = intra-bar live.
+   - تنبيه صريح للمستخدمين الذين يبنون backtesting خارجي.
+
+5. **توثيق Trade vs Zone State Independence**
+   - block يؤكد أن صفقة مفتوحة لا تُغلَق على تغيّر حالة المنطقة، فقط على TP/SL/TIME-STOP.
+   - منع سوء الفهم بين Strategy DNA والسلوك المُتوقَّع.
+
+### 🔴 إصلاحات حرجة (8 أصلية من تحليل V10)
 
 ### 🔴 إصلاحات حرجة
 
