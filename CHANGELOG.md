@@ -166,3 +166,26 @@
 - Multi-break consolidation: تنبيه واحد لكل دورة M15.
 - Palette: `tp_col`/`sl_col`/`entry_col`/`tp_line_col`/`sl_line_col`/`tp_border`/`sl_border` بقيم institutional gold، transparency ≥ 70 على البوكسات.
 - Alert format: `🟢 BUY` / `🟩 REBUY` / `🔴 SELL` / `🟥 RESELL` / `🟢⬆️ M15 BREAK` / `🔴⬇️ M15 BREAK` / `🟢⏫ MULTI` / `🔴⏬ MULTI`. بدون 🚀/💥/CONFIRMATION/TOUCH/@/Z1.
+
+
+### V9.9 Hybrid Stable — Aggregator Naming Pass
+
+تعديل cosmetic فقط على طبقة multi-break aggregator، لا يمسّ السلوك أو الـ architecture:
+
+- إعادة تسمية متغيرات الـ break aggregator لتطابق spec الاستراتيجية:
+  - `buy_break_lo`  → `multi_buy_from`  (lowest bot among breaking buy zones)
+  - `buy_break_hi`  → `multi_buy_to`    (highest top among breaking buy zones)
+  - `sell_break_hi` → `multi_sell_from` (highest top among breaking sell zones)
+  - `sell_break_lo` → `multi_sell_to`   (lowest bot among breaking sell zones)
+- أضيفت aliases للحالة الفردية: `first_buy_from` / `first_buy_to` / `first_sell_from` / `first_sell_to` (تعكس الزون الفردي عندما `count == 1`).
+- الـ dispatcher أعيد ترتيبه: single break أولاً، multi break ثانياً، باستخدام `if` (لا `else if`) — `count == 1` و `count > 1` متعاكستان منطقياً فقط واحد منهما يطلق.
+- النتيجة: الكود يتطابق نصياً مع spec المُعتمد، لا تغيير في الـ runtime behavior، لا تغيير في رسائل التنبيهات.
+
+#### تأكيدات نهائية (لم تتغير، للتوثيق)
+- ✅ Object pool: كل `box.new` / `line.new` / `label.new` داخل `var` declarations فقط (init مرة واحدة على أول bar). صفر `delete()`. صفر `*.new` داخل realtime loop.
+- ✅ Hide branch: ينفَّذ حصراً عند الـ transition (`ov_act[1] and not ov_act` أو `show_trade[1] and not show_trade`). لا `set_bgcolor(na)` ولا `set_color(na)` كل tick.
+- ✅ Break alerts: لا `alert()` للكسر داخل `f_zone` — `buy_break_evt` / `sell_break_evt` ترجع للـ aggregator العالمي فقط.
+- ✅ Palette: `#22C55E,82` / `#EF4444,82` / `#3B82F6,84` / `#EF4444,88` / `#FACC15,10` (line) / `#2563EB,15` / `#DC2626,15` / `#2563EB,25` / `#DC2626,20`.
+- ✅ Touch logic: BUY/SELL على الحافة القريبة، REBUY/RESELL على الحافة البعيدة (`close[1] > top` للـ rebuy، `close[1] < bot` للـ resell).
+- ✅ Break logic: `m15_h > top and m15_c > bot` / `m15_l < bot and m15_c < top` فقط، لا body-only، لا break_state arrays.
+- ❌ بدون UDT, lifecycle engine, institutional rotations, heavy anti-spam, architecture rewrite.

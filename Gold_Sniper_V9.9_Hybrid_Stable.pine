@@ -628,92 +628,106 @@ if barstate.isconfirmed
 // 🔔 Multi-break aggregation — single alert per cycle, no spam
 //==================================================
 // Counts how many zones triggered a NEW break this M15 close.
-//   new_buy_breaks  > 1  →  🟢⏫ M15 MULTI BREAK [lowest_bot ⟶ highest_top]
-//   new_buy_breaks == 1  →  🟢⬆️ M15 BREAK       [bot ⟶ top]
-//   new_sell_breaks > 1  →  🔴⏬ M15 MULTI BREAK [highest_top ⟶ lowest_bot]
-//   new_sell_breaks == 1 →  🔴⬇️ M15 BREAK       [top ⟶ bot]
-// Individual per-zone break alerts are NOT emitted from f_zone — only one global
-// message fires per cycle, killing spam from simultaneous zone breaks.
+//   new_buy_breaks  == 1 →  🟢⬆️ M15 BREAK       [first_buy_from  ⟶ first_buy_to]
+//   new_buy_breaks  > 1  →  🟢⏫ M15 MULTI BREAK [multi_buy_from  ⟶ multi_buy_to]
+//   new_sell_breaks == 1 →  🔴⬇️ M15 BREAK       [first_sell_from ⟶ first_sell_to]
+//   new_sell_breaks > 1  →  🔴⏬ M15 MULTI BREAK [multi_sell_from ⟶ multi_sell_to]
+//
+// Naming convention:
+//   buy  direction (price up):   from = bot side, to = top side
+//   sell direction (price down): from = top side, to = bot side
+//
+// Per spec: alert() for breaks NEVER fires inside f_zone — only the global
+// dispatcher below emits exactly one message per M15 cycle (no spam).
 int new_buy_breaks  = (bb1 ? 1 : 0) + (bb2 ? 1 : 0) + (bb3 ? 1 : 0) + (bb4 ? 1 : 0) + (bb5 ? 1 : 0) + (bb6 ? 1 : 0) + (bb7 ? 1 : 0) + (bb8 ? 1 : 0) + (bb9 ? 1 : 0) + (bb10 ? 1 : 0)
 int new_sell_breaks = (sb1 ? 1 : 0) + (sb2 ? 1 : 0) + (sb3 ? 1 : 0) + (sb4 ? 1 : 0) + (sb5 ? 1 : 0) + (sb6 ? 1 : 0) + (sb7 ? 1 : 0) + (sb8 ? 1 : 0) + (sb9 ? 1 : 0) + (sb10 ? 1 : 0)
 
-float buy_break_lo  = na
-float buy_break_hi  = na
-float sell_break_lo = na
-float sell_break_hi = na
+// Multi-break aggregates: extremes across ALL breaking zones in this cycle.
+float multi_buy_from  = na   // lowest  bot among breaking buy  zones
+float multi_buy_to    = na   // highest top among breaking buy  zones
+float multi_sell_from = na   // highest top among breaking sell zones
+float multi_sell_to   = na   // lowest  bot among breaking sell zones
 
 if bb1
-    buy_break_lo := na(buy_break_lo) ? v1_b : math.min(buy_break_lo, v1_b)
-    buy_break_hi := na(buy_break_hi) ? v1_t : math.max(buy_break_hi, v1_t)
+    multi_buy_from := na(multi_buy_from) ? v1_b : math.min(multi_buy_from, v1_b)
+    multi_buy_to   := na(multi_buy_to)   ? v1_t : math.max(multi_buy_to,   v1_t)
 if bb2
-    buy_break_lo := na(buy_break_lo) ? v2_b : math.min(buy_break_lo, v2_b)
-    buy_break_hi := na(buy_break_hi) ? v2_t : math.max(buy_break_hi, v2_t)
+    multi_buy_from := na(multi_buy_from) ? v2_b : math.min(multi_buy_from, v2_b)
+    multi_buy_to   := na(multi_buy_to)   ? v2_t : math.max(multi_buy_to,   v2_t)
 if bb3
-    buy_break_lo := na(buy_break_lo) ? v3_b : math.min(buy_break_lo, v3_b)
-    buy_break_hi := na(buy_break_hi) ? v3_t : math.max(buy_break_hi, v3_t)
+    multi_buy_from := na(multi_buy_from) ? v3_b : math.min(multi_buy_from, v3_b)
+    multi_buy_to   := na(multi_buy_to)   ? v3_t : math.max(multi_buy_to,   v3_t)
 if bb4
-    buy_break_lo := na(buy_break_lo) ? v4_b : math.min(buy_break_lo, v4_b)
-    buy_break_hi := na(buy_break_hi) ? v4_t : math.max(buy_break_hi, v4_t)
+    multi_buy_from := na(multi_buy_from) ? v4_b : math.min(multi_buy_from, v4_b)
+    multi_buy_to   := na(multi_buy_to)   ? v4_t : math.max(multi_buy_to,   v4_t)
 if bb5
-    buy_break_lo := na(buy_break_lo) ? v5_b : math.min(buy_break_lo, v5_b)
-    buy_break_hi := na(buy_break_hi) ? v5_t : math.max(buy_break_hi, v5_t)
+    multi_buy_from := na(multi_buy_from) ? v5_b : math.min(multi_buy_from, v5_b)
+    multi_buy_to   := na(multi_buy_to)   ? v5_t : math.max(multi_buy_to,   v5_t)
 if bb6
-    buy_break_lo := na(buy_break_lo) ? v6_b : math.min(buy_break_lo, v6_b)
-    buy_break_hi := na(buy_break_hi) ? v6_t : math.max(buy_break_hi, v6_t)
+    multi_buy_from := na(multi_buy_from) ? v6_b : math.min(multi_buy_from, v6_b)
+    multi_buy_to   := na(multi_buy_to)   ? v6_t : math.max(multi_buy_to,   v6_t)
 if bb7
-    buy_break_lo := na(buy_break_lo) ? v7_b : math.min(buy_break_lo, v7_b)
-    buy_break_hi := na(buy_break_hi) ? v7_t : math.max(buy_break_hi, v7_t)
+    multi_buy_from := na(multi_buy_from) ? v7_b : math.min(multi_buy_from, v7_b)
+    multi_buy_to   := na(multi_buy_to)   ? v7_t : math.max(multi_buy_to,   v7_t)
 if bb8
-    buy_break_lo := na(buy_break_lo) ? v8_b : math.min(buy_break_lo, v8_b)
-    buy_break_hi := na(buy_break_hi) ? v8_t : math.max(buy_break_hi, v8_t)
+    multi_buy_from := na(multi_buy_from) ? v8_b : math.min(multi_buy_from, v8_b)
+    multi_buy_to   := na(multi_buy_to)   ? v8_t : math.max(multi_buy_to,   v8_t)
 if bb9
-    buy_break_lo := na(buy_break_lo) ? v9_b : math.min(buy_break_lo, v9_b)
-    buy_break_hi := na(buy_break_hi) ? v9_t : math.max(buy_break_hi, v9_t)
+    multi_buy_from := na(multi_buy_from) ? v9_b : math.min(multi_buy_from, v9_b)
+    multi_buy_to   := na(multi_buy_to)   ? v9_t : math.max(multi_buy_to,   v9_t)
 if bb10
-    buy_break_lo := na(buy_break_lo) ? v10_b : math.min(buy_break_lo, v10_b)
-    buy_break_hi := na(buy_break_hi) ? v10_t : math.max(buy_break_hi, v10_t)
+    multi_buy_from := na(multi_buy_from) ? v10_b : math.min(multi_buy_from, v10_b)
+    multi_buy_to   := na(multi_buy_to)   ? v10_t : math.max(multi_buy_to,   v10_t)
 
 if sb1
-    sell_break_hi := na(sell_break_hi) ? v1_t : math.max(sell_break_hi, v1_t)
-    sell_break_lo := na(sell_break_lo) ? v1_b : math.min(sell_break_lo, v1_b)
+    multi_sell_from := na(multi_sell_from) ? v1_t : math.max(multi_sell_from, v1_t)
+    multi_sell_to   := na(multi_sell_to)   ? v1_b : math.min(multi_sell_to,   v1_b)
 if sb2
-    sell_break_hi := na(sell_break_hi) ? v2_t : math.max(sell_break_hi, v2_t)
-    sell_break_lo := na(sell_break_lo) ? v2_b : math.min(sell_break_lo, v2_b)
+    multi_sell_from := na(multi_sell_from) ? v2_t : math.max(multi_sell_from, v2_t)
+    multi_sell_to   := na(multi_sell_to)   ? v2_b : math.min(multi_sell_to,   v2_b)
 if sb3
-    sell_break_hi := na(sell_break_hi) ? v3_t : math.max(sell_break_hi, v3_t)
-    sell_break_lo := na(sell_break_lo) ? v3_b : math.min(sell_break_lo, v3_b)
+    multi_sell_from := na(multi_sell_from) ? v3_t : math.max(multi_sell_from, v3_t)
+    multi_sell_to   := na(multi_sell_to)   ? v3_b : math.min(multi_sell_to,   v3_b)
 if sb4
-    sell_break_hi := na(sell_break_hi) ? v4_t : math.max(sell_break_hi, v4_t)
-    sell_break_lo := na(sell_break_lo) ? v4_b : math.min(sell_break_lo, v4_b)
+    multi_sell_from := na(multi_sell_from) ? v4_t : math.max(multi_sell_from, v4_t)
+    multi_sell_to   := na(multi_sell_to)   ? v4_b : math.min(multi_sell_to,   v4_b)
 if sb5
-    sell_break_hi := na(sell_break_hi) ? v5_t : math.max(sell_break_hi, v5_t)
-    sell_break_lo := na(sell_break_lo) ? v5_b : math.min(sell_break_lo, v5_b)
+    multi_sell_from := na(multi_sell_from) ? v5_t : math.max(multi_sell_from, v5_t)
+    multi_sell_to   := na(multi_sell_to)   ? v5_b : math.min(multi_sell_to,   v5_b)
 if sb6
-    sell_break_hi := na(sell_break_hi) ? v6_t : math.max(sell_break_hi, v6_t)
-    sell_break_lo := na(sell_break_lo) ? v6_b : math.min(sell_break_lo, v6_b)
+    multi_sell_from := na(multi_sell_from) ? v6_t : math.max(multi_sell_from, v6_t)
+    multi_sell_to   := na(multi_sell_to)   ? v6_b : math.min(multi_sell_to,   v6_b)
 if sb7
-    sell_break_hi := na(sell_break_hi) ? v7_t : math.max(sell_break_hi, v7_t)
-    sell_break_lo := na(sell_break_lo) ? v7_b : math.min(sell_break_lo, v7_b)
+    multi_sell_from := na(multi_sell_from) ? v7_t : math.max(multi_sell_from, v7_t)
+    multi_sell_to   := na(multi_sell_to)   ? v7_b : math.min(multi_sell_to,   v7_b)
 if sb8
-    sell_break_hi := na(sell_break_hi) ? v8_t : math.max(sell_break_hi, v8_t)
-    sell_break_lo := na(sell_break_lo) ? v8_b : math.min(sell_break_lo, v8_b)
+    multi_sell_from := na(multi_sell_from) ? v8_t : math.max(multi_sell_from, v8_t)
+    multi_sell_to   := na(multi_sell_to)   ? v8_b : math.min(multi_sell_to,   v8_b)
 if sb9
-    sell_break_hi := na(sell_break_hi) ? v9_t : math.max(sell_break_hi, v9_t)
-    sell_break_lo := na(sell_break_lo) ? v9_b : math.min(sell_break_lo, v9_b)
+    multi_sell_from := na(multi_sell_from) ? v9_t : math.max(multi_sell_from, v9_t)
+    multi_sell_to   := na(multi_sell_to)   ? v9_b : math.min(multi_sell_to,   v9_b)
 if sb10
-    sell_break_hi := na(sell_break_hi) ? v10_t : math.max(sell_break_hi, v10_t)
-    sell_break_lo := na(sell_break_lo) ? v10_b : math.min(sell_break_lo, v10_b)
+    multi_sell_from := na(multi_sell_from) ? v10_t : math.max(multi_sell_from, v10_t)
+    multi_sell_to   := na(multi_sell_to)   ? v10_b : math.min(multi_sell_to,   v10_b)
 
-// Single-message dispatcher: MULTI when >1, single when ==1.
+// Single-break extremes alias multi (only one zone broke → multi == single zone).
+float first_buy_from  = multi_buy_from
+float first_buy_to    = multi_buy_to
+float first_sell_from = multi_sell_from
+float first_sell_to   = multi_sell_to
+
+// Dispatcher — exactly one message fires per direction per cycle.
+// `new_buy_breaks == 1` and `new_buy_breaks > 1` are mutually exclusive,
+// so plain `if` (not `else if`) is intentional and matches spec.
+if new_buy_breaks == 1
+    alert("🟢⬆️ M15 BREAK [" + f_num(first_buy_from) + " ⟶ " + f_num(first_buy_to) + "]", alert.freq_all)
 if new_buy_breaks > 1
-    alert("🟢⏫ M15 MULTI BREAK [" + f_num(buy_break_lo) + " ⟶ " + f_num(buy_break_hi) + "]", alert.freq_all)
-else if new_buy_breaks == 1
-    alert("🟢⬆️ M15 BREAK [" + f_num(buy_break_lo) + " ⟶ " + f_num(buy_break_hi) + "]", alert.freq_all)
+    alert("🟢⏫ M15 MULTI BREAK [" + f_num(multi_buy_from) + " ⟶ " + f_num(multi_buy_to) + "]", alert.freq_all)
 
+if new_sell_breaks == 1
+    alert("🔴⬇️ M15 BREAK [" + f_num(first_sell_from) + " ⟶ " + f_num(first_sell_to) + "]", alert.freq_all)
 if new_sell_breaks > 1
-    alert("🔴⏬ M15 MULTI BREAK [" + f_num(sell_break_hi) + " ⟶ " + f_num(sell_break_lo) + "]", alert.freq_all)
-else if new_sell_breaks == 1
-    alert("🔴⬇️ M15 BREAK [" + f_num(sell_break_hi) + " ⟶ " + f_num(sell_break_lo) + "]", alert.freq_all)
+    alert("🔴⏬ M15 MULTI BREAK [" + f_num(multi_sell_from) + " ⟶ " + f_num(multi_sell_to) + "]", alert.freq_all)
 
 // H1/H4 confirmation alerts (single-shot per cycle, reformatted).
 bool h1_buy_break_global  = hb1 or hb2 or hb3 or hb4 or hb5 or hb6 or hb7 or hb8 or hb9 or hb10
