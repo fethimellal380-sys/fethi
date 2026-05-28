@@ -1,0 +1,411 @@
+//@version=5
+indicator("Gold Sniper V11 Core-Fixed Institutional Edition", overlay=true, max_boxes_count=500, max_bars_back=500, max_lines_count=500)
+
+//==================================================
+// ⚙️ الإعدادات العامة
+//==================================================
+grp_gen = "الإعدادات العامة"
+offset         = input.float(1.0,  "حساسية اللمس",                  minval=0.1, step=0.1, group=grp_gen)
+show_dist      = input.float(0.0,  "مسافة إظهار المناطق (0=الكل)",  step=1,               group=grp_gen)
+extend_right   = input.int(35,     "امتداد البوكس يميناً",           minval=5, maxval=100, group=grp_gen)
+time_stop_bars = input.int(96,     "Time Stop Bars",               minval=10, maxval=500, group=grp_gen)
+
+grp_col = "ألوان المناطق الرئيسية"
+buy_c  = input.color(color.new(color.lime, 85), "منطقة شراء", group=grp_col)
+sell_c = input.color(color.new(color.red,  85), "منطقة بيع",  group=grp_col)
+neut_c = input.color(color.new(color.gray, 85), "سعر محايد",  group=grp_col)
+
+// ألوان مؤسسية هادئة
+var color tp_col    = color.new(#60A5FA, 88)
+var color sl_col    = color.new(#EF4444, 93)
+var color tp_border = color.new(#60A5FA, 75)
+var color sl_border = color.new(#EF4444, 85)
+
+//==================================================
+// ☁️ إعدادات السحابة المؤسسية (Cloud Engine)
+//==================================================
+grp_cloud = "☁️ السحابة المؤسسية"
+show_clouds    = input.bool(true, "تفعيل السحابة", group=grp_cloud)
+buy_cloud_col  = input.color(color.new(#10B981, 88), "سحابة الشراء", group=grp_cloud)
+sell_cloud_col = input.color(color.new(#EF4444, 88), "سحابة البيع", group=grp_cloud)
+
+//==================================================
+// 📥 إدخال المناطق العشر
+//==================================================
+z1=input.bool(true,"Z1",inline="1"),   t1=input.float(3665.0,"T",inline="1"),  b1=input.float(3655.0,"B",inline="1")
+z2=input.bool(true,"Z2",inline="2"),   t2=input.float(3425.0,"T",inline="2"),  b2=input.float(3415.0,"B",inline="2")
+z3=input.bool(true,"Z3",inline="3"),   t3=input.float(3300.0,"T",inline="3"),  b3=input.float(3290.0,"B",inline="3")
+z4=input.bool(true,"Z4",inline="4"),   t4=input.float(3200.0,"T",inline="4"),  b4=input.float(3190.0,"B",inline="4")
+z5=input.bool(true,"Z5",inline="5"),   t5=input.float(3100.0,"T",inline="5"),  b5=input.float(3090.0,"B",inline="5")
+z6=input.bool(true,"Z6",inline="6"),   t6=input.float(3000.0,"T",inline="6"),  b6=input.float(2990.0,"B",inline="6")
+z7=input.bool(true,"Z7",inline="7"),   t7=input.float(2900.0,"T",inline="7"),  b7=input.float(2890.0,"B",inline="7")
+z8=input.bool(true,"Z8",inline="8"),   t8=input.float(2800.0,"T",inline="8"),  b8=input.float(2790.0,"B",inline="8")
+z9=input.bool(true,"Z9",inline="9"),   t9=input.float(2700.0,"T",inline="9"),  b9=input.float(2690.0,"B",inline="9")
+z10=input.bool(true,"Z10",inline="10"),t10=input.float(2600.0,"T",inline="10"),b10=input.float(2590.0,"B",inline="10")
+
+en_arr = array.from(z1,z2,z3,z4,z5,z6,z7,z8,z9,z10)
+tp_arr = array.from(t1,t2,t3,t4,t5,t6,t7,t8,t9,t10)
+bt_arr = array.from(b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+
+f_num(v) => str.tostring(v, "#.##")
+
+//==================================================
+// 🎯 محرك أهداف السيولة الديناميكي
+//==================================================
+f_tp2_buy(float c_top, array<bool> en, array<float> top_a, array<float> bot_a) =>
+    float n_tp = c_top + 30.0
+    float min_d = 999999.0
+    for i = 0 to 9
+        if array.get(en, i)
+            float z_bot = math.min(array.get(top_a, i), array.get(bot_a, i))
+            if z_bot > c_top
+                if (z_bot - c_top) < min_d
+                    min_d := (z_bot - c_top)
+                    n_tp := z_bot
+    n_tp
+
+f_tp2_sell(float c_bot, array<bool> en, array<float> top_a, array<float> bot_a) =>
+    float n_tp = c_bot - 30.0
+    float min_d = 999999.0
+    for i = 0 to 9
+        if array.get(en, i)
+            float z_top = math.max(array.get(top_a, i), array.get(bot_a, i))
+            if z_top < c_bot
+                if (c_bot - z_top) < min_d
+                    min_d := (c_bot - z_top)
+                    n_tp := z_top
+    n_tp
+
+//==================================================
+// 🛰️ MTF FETCH — HARDENED PRODUCTION VERSION
+//==================================================
+bool valid_tf = timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
+
+float m15_close_r = na
+float m15_high_r  = na
+float m15_low_r   = na
+
+if valid_tf
+    [m15_close_r, m15_high_r, m15_low_r] := request.security(syminfo.tickerid, "15", [close, high, low], lookahead=barmerge.lookahead_off)
+
+m15_event = ta.change(time("15")) != 0
+
+//==================================================
+// 🧠 نظام الذاكرة للحالات (State & Memory)
+//==================================================
+var break_state_m15     = array.new_string(10, "NONE")
+var buy_touch_mem       = array.new_bool(10, false)
+var sell_touch_mem      = array.new_bool(10, false)
+
+var active_buy_overlay  = array.new_bool(10, false)
+var active_sell_overlay = array.new_bool(10, false)
+var active_tp2          = array.new_float(10, na)
+var active_sl           = array.new_float(10, na)
+var has_rebuy           = array.new_bool(10, false)
+var has_resell          = array.new_bool(10, false)
+var overlay_bar         = array.new_int(10, na)
+
+// 📊 ذاكرة التراكم المؤسسي
+var int consecutive_buy_count  = 0
+var int consecutive_sell_count = 0
+var float first_buy_bot  = na
+var float last_buy_top   = na
+var float first_sell_top = na
+var float last_sell_bot  = na
+
+//==================================================
+// 🎨 كائنات الرسم الدائمة (Persistent Object Pools)
+//==================================================
+var boxes       = array.new_box(10)
+var tp_boxes    = array.new_box(10)
+var sl_boxes    = array.new_box(10)
+var entry_lines = array.new_line(10)
+var tp1_lines   = array.new_line(10)
+var tp_lines    = array.new_line(10)
+var sl_lines    = array.new_line(10)
+var scale_lines = array.new_line(10)
+
+// خطوط السحابة الدائمة
+var line buy_cloud_top  = na
+var line buy_cloud_bot  = na
+var line sell_cloud_top = na
+var line sell_cloud_bot = na
+
+if barstate.isfirst
+    for i = 0 to 9
+        array.set(boxes,       i, box.new(na, na, na, na, border_width=1))
+        array.set(tp_boxes,    i, box.new(na, na, na, na, border_width=1))
+        array.set(sl_boxes,    i, box.new(na, na, na, na, border_width=1))
+        array.set(entry_lines, i, line.new(na, na, na, na, width=2, style=line.style_solid))
+        array.set(tp1_lines,   i, line.new(na, na, na, na, width=1, style=line.style_dashed))
+        array.set(tp_lines,    i, line.new(na, na, na, na, width=2, style=line.style_dashed))
+        array.set(sl_lines,    i, line.new(na, na, na, na, width=2, style=line.style_dotted))
+        array.set(scale_lines, i, line.new(na, na, na, na, width=4, style=line.style_solid))
+
+    // تهيئة السحابة
+    buy_cloud_top  := line.new(na, na, na, na, color=color(na))
+    buy_cloud_bot  := line.new(na, na, na, na, color=color(na))
+    linefill.new(buy_cloud_top, buy_cloud_bot, buy_cloud_col)
+
+    sell_cloud_top := line.new(na, na, na, na, color=color(na))
+    sell_cloud_bot := line.new(na, na, na, na, color=color(na))
+    linefill.new(sell_cloud_top, sell_cloud_bot, sell_cloud_col)
+
+// تحسين الأداء والرسم V12-HARDEN
+varip float last_drawn_close = na
+bool is_active_bar = barstate.islastconfirmedhistory or barstate.isrealtime
+bool should_redraw = is_active_bar and (na(last_drawn_close) or close != last_drawn_close)
+if should_redraw
+    last_drawn_close := close
+
+//==================================================
+// 🔄 مجمّعات كسور الدورة الحالية
+//==================================================
+int new_buy_breaks  = 0
+int new_sell_breaks = 0
+
+//==================================================
+// ⚙️ المعالجة الرئيسية والمحرك
+//==================================================
+for i = 0 to 9
+    if array.get(en_arr, i)
+        float top_v = math.max(array.get(tp_arr, i), array.get(bt_arr, i))
+        float bot_v = math.min(array.get(tp_arr, i), array.get(bt_arr, i))
+        float mid_v = (top_v + bot_v) / 2
+
+        float tp2_c = array.get(active_tp2, i)
+        float sl_c  = array.get(active_sl, i)
+        int start_bar = array.get(overlay_bar, i)
+
+        // ===== ⚖️ REAL TRADE LIFECYCLE (Primary Close) =====
+        if array.get(active_buy_overlay, i)
+            if not na(tp2_c) and not na(sl_c)
+                if low <= sl_c
+                    array.set(active_buy_overlay, i, false)
+                    array.set(has_rebuy, i, false)
+                    array.set(active_tp2, i, na)
+                    array.set(active_sl, i, na)
+                    array.set(overlay_bar, i, na)
+                else if high >= tp2_c
+                    array.set(active_buy_overlay, i, false)
+                    array.set(has_rebuy, i, false)
+                    array.set(active_tp2, i, na)
+                    array.set(active_sl, i, na)
+                    array.set(overlay_bar, i, na)
+
+        if array.get(active_sell_overlay, i)
+            if not na(tp2_c) and not na(sl_c)
+                if high >= sl_c
+                    array.set(active_sell_overlay, i, false)
+                    array.set(has_resell, i, false)
+                    array.set(active_tp2, i, na)
+                    array.set(active_sl, i, na)
+                    array.set(overlay_bar, i, na)
+                else if low <= tp2_c
+                    array.set(active_sell_overlay, i, false)
+                    array.set(has_resell, i, false)
+                    array.set(active_tp2, i, na)
+                    array.set(active_sl, i, na)
+                    array.set(overlay_bar, i, na)
+
+        // ===== 🗑️ TIME EXPIRATION (Backup Cleanup) =====
+        if not na(start_bar) and (bar_index - start_bar) > time_stop_bars
+            array.set(active_buy_overlay, i, false)
+            array.set(active_sell_overlay, i, false)
+            array.set(has_rebuy, i, false)
+            array.set(has_resell, i, false)
+            array.set(active_tp2, i, na)
+            array.set(active_sl, i, na)
+            array.set(overlay_bar, i, na)
+
+        // ===== ✅ STRICT INSTITUTIONAL BODY BREAK LOGIC =====
+        if m15_event and not na(m15_close_r) and not na(m15_high_r) and not na(m15_low_r)
+
+            bool valid_buy_break  = m15_close_r > top_v and m15_high_r > top_v
+            bool valid_sell_break = m15_close_r < bot_v and m15_low_r < bot_v
+
+            bool final_buy_break  = valid_buy_break and not valid_sell_break
+            bool final_sell_break = valid_sell_break and not valid_buy_break
+
+            if final_buy_break and array.get(break_state_m15, i) != "UP"
+                array.set(break_state_m15, i, "UP")
+                if consecutive_buy_count == 0 and new_buy_breaks == 0
+                    first_buy_bot := bot_v
+                new_buy_breaks += 1
+                last_buy_top := top_v
+
+            else if final_sell_break and array.get(break_state_m15, i) != "DOWN"
+                array.set(break_state_m15, i, "DOWN")
+                if consecutive_sell_count == 0 and new_sell_breaks == 0
+                    first_sell_top := top_v
+                new_sell_breaks += 1
+                last_sell_bot := bot_v
+
+            // BREAK STATE STABILITY & MOMENTUM RESET
+            else if not final_buy_break and not final_sell_break
+                if m15_close_r <= top_v and m15_close_r >= bot_v
+                    if array.get(break_state_m15, i) != "NONE"
+                        array.set(break_state_m15, i, "NONE")
+
+        // ===== ✅ STRICT TOUCH FILTER WITH STRUCTURE REQUIREMENT =====
+        bool buy_touch  = low <= top_v and close >= top_v - offset and close <= top_v + offset and array.get(break_state_m15, i) == "UP"
+        bool sell_touch = high >= bot_v and close <= bot_v + offset and close >= bot_v - offset and array.get(break_state_m15, i) == "DOWN"
+
+        bool final_buy_touch  = buy_touch and not sell_touch
+        bool final_sell_touch = sell_touch and not buy_touch
+
+        // ===== ⚡ EXECUTION ENGINE =====
+        if final_buy_touch and not array.get(buy_touch_mem, i) and not array.get(active_buy_overlay, i)
+            alert("🟢 BUY TOUCH Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+            array.set(buy_touch_mem, i, true)
+            array.set(active_sell_overlay, i, false)
+            array.set(has_resell, i, false)
+
+            array.set(active_buy_overlay, i, true)
+            array.set(has_rebuy, i, false)
+            array.set(overlay_bar, i, bar_index)
+            array.set(active_tp2, i, f_tp2_buy(top_v, en_arr, tp_arr, bt_arr))
+            array.set(active_sl, i, bot_v - 3)
+
+        if not final_buy_touch
+            array.set(buy_touch_mem, i, false)
+
+        if final_sell_touch and not array.get(sell_touch_mem, i) and not array.get(active_sell_overlay, i)
+            alert("🔴 SELL TOUCH Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+            array.set(sell_touch_mem, i, true)
+            array.set(active_buy_overlay, i, false)
+            array.set(has_rebuy, i, false)
+
+            array.set(active_sell_overlay, i, true)
+            array.set(has_resell, i, false)
+            array.set(overlay_bar, i, bar_index)
+            array.set(active_tp2, i, f_tp2_sell(bot_v, en_arr, tp_arr, bt_arr))
+            array.set(active_sl, i, top_v + 3)
+
+        if not final_sell_touch
+            array.set(sell_touch_mem, i, false)
+
+        // ===== 🔄 REBUY / RESELL SCALE-IN ENGINE =====
+        if array.get(active_buy_overlay, i) and low <= bot_v and close >= bot_v - offset and not array.get(has_rebuy, i)
+            array.set(has_rebuy, i, true)
+            alert("🟩 REBUY Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+
+        if array.get(active_sell_overlay, i) and high >= top_v and close <= top_v + offset and not array.get(has_resell, i)
+            array.set(has_resell, i, true)
+            alert("🟥 RESELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+
+        // V12-HARDEN#4: تحديث اللقطة لتجنب الرسومات العالقة
+        start_bar := array.get(overlay_bar, i)
+        tp2_c     := array.get(active_tp2, i)
+        sl_c      := array.get(active_sl, i)
+
+        // ===== 🎨 VISUAL RENDERING =====
+        if should_redraw
+            box bx_ref = array.get(boxes, i)
+            color f_col = close < bot_v ? sell_c : (close > top_v ? buy_c : neut_c)
+
+            if show_dist <= 0 or math.abs(close - mid_v) <= show_dist
+                box.set_left(bx_ref, math.max(0, bar_index - 500))
+                box.set_right(bx_ref, bar_index + extend_right)
+                box.set_top(bx_ref, top_v)
+                box.set_bottom(bx_ref, bot_v)
+                box.set_bgcolor(bx_ref, f_col)
+                box.set_border_color(bx_ref, color.new(f_col, 40))
+            else
+                box.set_bgcolor(bx_ref, color(na))
+                box.set_border_color(bx_ref, color(na))
+
+            box tp_bx   = array.get(tp_boxes, i)
+            box sl_bx   = array.get(sl_boxes, i)
+            line en_ln  = array.get(entry_lines, i)
+            line tp1_ln = array.get(tp1_lines, i)
+            line tp_ln  = array.get(tp_lines, i)
+            line sl_ln  = array.get(sl_lines, i)
+            line sc_ln  = array.get(scale_lines, i)
+
+            int draw_right = na(start_bar) ? bar_index : math.min(bar_index + extend_right, start_bar + time_stop_bars)
+
+            if array.get(active_buy_overlay, i)
+                float tp2 = array.get(active_tp2, i)
+                float sl  = array.get(active_sl, i)
+                float tp1 = top_v + (tp2 - top_v) / 2
+
+                box.set_left(tp_bx, start_bar), box.set_right(tp_bx, draw_right)
+                box.set_top(tp_bx, math.max(tp1, top_v)), box.set_bottom(tp_bx, math.min(tp1, top_v))
+                box.set_bgcolor(tp_bx, tp_col), box.set_border_color(tp_bx, tp_border)
+
+                box.set_left(sl_bx, start_bar), box.set_right(sl_bx, draw_right)
+                box.set_top(sl_bx, math.max(top_v, sl)), box.set_bottom(sl_bx, math.min(top_v, sl))
+                box.set_bgcolor(sl_bx, sl_col), box.set_border_color(sl_bx, sl_border)
+
+                line.set_xy1(en_ln, start_bar, top_v), line.set_xy2(en_ln, draw_right, top_v), line.set_color(en_ln, color.new(#F59E0B, 30))
+                line.set_xy1(tp1_ln, start_bar, tp1),  line.set_xy2(tp1_ln, draw_right, tp1),  line.set_color(tp1_ln, color.new(#60A5FA, 50))
+                line.set_xy1(tp_ln, start_bar, tp2),   line.set_xy2(tp_ln, draw_right, tp2),   line.set_color(tp_ln, color.new(#60A5FA, 30))
+                line.set_xy1(sl_ln, start_bar, sl),    line.set_xy2(sl_ln, draw_right, sl),    line.set_color(sl_ln, color.new(#EF4444, 30))
+
+                if array.get(has_rebuy, i)
+                    line.set_xy1(sc_ln, start_bar, bot_v), line.set_xy2(sc_ln, draw_right, bot_v), line.set_color(sc_ln, color.new(#10B981, 15))
+                else
+                    line.set_color(sc_ln, color(na))
+                    line.set_xy1(sc_ln, bar_index, close)
+                    line.set_xy2(sc_ln, bar_index, close)
+
+            else if array.get(active_sell_overlay, i)
+                float tp2 = array.get(active_tp2, i)
+                float sl  = array.get(active_sl, i)
+                float tp1 = bot_v - (bot_v - tp2) / 2
+
+                box.set_left(tp_bx, start_bar), box.set_right(tp_bx, draw_right)
+                box.set_top(tp_bx, math.max(bot_v, tp1)), box.set_bottom(tp_bx, math.min(bot_v, tp1))
+                box.set_bgcolor(tp_bx, tp_col), box.set_border_color(tp_bx, tp_border)
+
+                box.set_left(sl_bx, start_bar), box.set_right(sl_bx, draw_right)
+                box.set_top(sl_bx, math.max(sl, bot_v)), box.set_bottom(sl_bx, math.min(sl, bot_v))
+                box.set_bgcolor(sl_bx, sl_col), box.set_border_color(sl_bx, sl_border)
+
+                line.set_xy1(en_ln, start_bar, bot_v), line.set_xy2(en_ln, draw_right, bot_v), line.set_color(en_ln, color.new(#F59E0B, 30))
+                line.set_xy1(tp1_ln, start_bar, tp1),  line.set_xy2(tp1_ln, draw_right, tp1),  line.set_color(tp1_ln, color.new(#60A5FA, 50))
+                line.set_xy1(tp_ln, start_bar, tp2),   line.set_xy2(tp_ln, draw_right, tp2),   line.set_color(tp_ln, color.new(#60A5FA, 30))
+                line.set_xy1(sl_ln, start_bar, sl),    line.set_xy2(sl_ln, draw_right, sl),    line.set_color(sl_ln, color.new(#EF4444, 30))
+
+                if array.get(has_resell, i)
+                    line.set_xy1(sc_ln, start_bar, top_v), line.set_xy2(sc_ln, draw_right, top_v), line.set_color(sc_ln, color.new(#EF4444, 15))
+                else
+                    line.set_color(sc_ln, color(na))
+                    line.set_xy1(sc_ln, bar_index, close)
+                    line.set_xy2(sc_ln, bar_index, close)
+
+            else
+                box.set_bgcolor(tp_bx, color(na)), box.set_border_color(tp_bx, color(na))
+                box.set_left(tp_bx, bar_index), box.set_right(tp_bx, bar_index)
+
+                box.set_bgcolor(sl_bx, color(na)), box.set_border_color(sl_bx, color(na))
+                box.set_left(sl_bx, bar_index), box.set_right(sl_bx, bar_index)
+
+                line.set_color(en_ln, color(na))
+                line.set_xy1(en_ln, bar_index, close), line.set_xy2(en_ln, bar_index, close)
+
+                line.set_color(tp1_ln, color(na))
+                line.set_xy1(tp1_ln, bar_index, close), line.set_xy2(tp1_ln, bar_index, close)
+
+                line.set_color(tp_ln, color(na))
+                line.set_xy1(tp_ln, bar_index, close), line.set_xy2(tp_ln, bar_index, close)
+
+                line.set_color(sl_ln, color(na))
+                line.set_xy1(sl_ln, bar_index, close), line.set_xy2(sl_ln, bar_index, close)
+
+                line.set_color(sc_ln, color(na))
+                line.set_xy1(sc_ln, bar_index, close)
+                line.set_xy2(sc_ln, bar_index, close)
+
+//==================================================
+// 🚀 نظام الكسور المتتالية المدمجة
+//==================================================
+if m15_event
+    if new_buy_breaks > 0
+        consecutive_buy_count += new_buy_breaks
+        consecutive_sell_count := 0
+
+    if new_sell_breaks > 0
+        consecutive_sell_count += new_sell_breaks
+        consecutive_buy_count := 0
