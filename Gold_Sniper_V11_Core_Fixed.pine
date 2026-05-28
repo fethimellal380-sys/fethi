@@ -221,15 +221,15 @@ for i = 0 to 9
         // ===== ✅ STRICT INSTITUTIONAL BODY BREAK LOGIC =====
         if m15_event and not na(m15_close_r) and not na(m15_high_r) and not na(m15_low_r)
 
-            // ===== ⚡ PARTIAL BODY BREAK LOGIC (V9 ORIGINAL) =====
-            float body_top = math.max(m15_close_r, open)
-            float body_bot = math.min(m15_close_r, open)
+            // ⚡ PURE SNIPER BREAK LOGIC
 
-            bool valid_buy_break  = body_top > top_v
-            bool valid_sell_break = body_bot < bot_v
+            bool final_buy_break =
+                 m15_high_r > top_v and
+                 m15_close_r > bot_v
 
-            bool final_buy_break  = valid_buy_break and not valid_sell_break
-            bool final_sell_break = valid_sell_break and not valid_buy_break
+            bool final_sell_break =
+                 m15_low_r < bot_v and
+                 m15_close_r < top_v
 
             if final_buy_break and array.get(break_state_m15, i) != "UP"
                 array.set(break_state_m15, i, "UP")
@@ -251,14 +251,17 @@ for i = 0 to 9
                     if array.get(break_state_m15, i) != "NONE"
                         array.set(break_state_m15, i, "NONE")
 
-        // ===== 🎯 PURE SNIPER TOUCH LOGIC (V9 STYLE) =====
+        // 🟢 PURE BUY TOUCH
         bool buy_touch =
-             low <= top_v
-         and close >= top_v - offset
+             low <= top_v + offset and
+             close > bot_v and
+             array.get(break_state_m15, i) == "UP"
 
+        // 🔴 PURE SELL TOUCH
         bool sell_touch =
-             high >= bot_v
-         and close <= bot_v + offset
+             high >= bot_v - offset and
+             close < top_v and
+             array.get(break_state_m15, i) == "DOWN"
 
         bool final_buy_touch  = buy_touch
         bool final_sell_touch = sell_touch
@@ -295,13 +298,17 @@ for i = 0 to 9
             array.set(sell_touch_mem, i, false)
 
         // ===== 🔄 REBUY / RESELL SCALE-IN ENGINE =====
-        if array.get(active_buy_overlay, i) and low <= bot_v and close >= bot_v - offset and not array.get(has_rebuy, i)
-            array.set(has_rebuy, i, true)
-            alert("🟩 REBUY Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+        if array.get(active_buy_overlay, i)
+            if low <= bot_v + offset
+                if not array.get(has_rebuy, i)
+                    array.set(has_rebuy, i, true)
+                    alert("🟩 REBUY Z" + str.tostring(i + 1), alert.freq_once_per_bar)
 
-        if array.get(active_sell_overlay, i) and high >= top_v and close <= top_v + offset and not array.get(has_resell, i)
-            array.set(has_resell, i, true)
-            alert("🟥 RESELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
+        if array.get(active_sell_overlay, i)
+            if high >= top_v - offset
+                if not array.get(has_resell, i)
+                    array.set(has_resell, i, true)
+                    alert("🟥 RESELL Z" + str.tostring(i + 1), alert.freq_once_per_bar)
 
         // V12-HARDEN#4: تحديث اللقطة لتجنب الرسومات العالقة
         start_bar := array.get(overlay_bar, i)
