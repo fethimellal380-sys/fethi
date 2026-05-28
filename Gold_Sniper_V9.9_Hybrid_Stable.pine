@@ -249,8 +249,15 @@ f_zone(enable, top, bot, name) =>
         resell_alert_sent := false
         buy_break_sent    := false
         sell_break_sent   := false
-        h1_break_sent     := false
-        h4_break_sent     := false
+
+    // H1 / H4 break latches reset only on their respective HTF close, not every
+    // chart bar. Ensures the global alert() call fires every tick of the HTF-close
+    // chart bar (including the closing tick that alert.freq_once_per_bar_close
+    // requires), preventing missed/erratic H1/H4 alert delivery.
+    if h1_just_closed
+        h1_break_sent := false
+    if h4_just_closed
+        h4_break_sent := false
 
     // ── Per-call event flags (returned for global aggregation) ───────
     bool buy_break_evt     = false

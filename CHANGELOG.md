@@ -227,3 +227,67 @@
 - Break logic: `final_buy_break = m15_h > top and m15_c > bot` + `final_sell_break = m15_l < bot and m15_c < top` — كما هي.
 - Touch logic: BUY/SELL على الحافة القريبة، REBUY/RESELL على الحافة البعيدة — كما هي + `has_prev` guard فقط.
 - Unlock logic، Overlay removal، Rendering system، Object pools، Architecture، Naming — صفر تغيير.
+
+
+### V9.9 Hybrid Stable — H1/H4 Latch Reset Fix
+
+تعديل واحد جراحي على آلية إعادة تعيين latches الكسر للـ H1/H4. باقي توجيهات الـ Patch Order كانت **no-ops** لأنها مطبَّقة بالفعل من الجولات السابقة.
+
+#### تحليل توجيهات Patch Order
+
+| التوجيه | الحالة |
+|---|---|
+| 1. Fix H1/H4 alert spam (latch reset gating) | ⚠️ **طُبِّق الآن** |
+| 2. `has_prev` close[1] protection | ✅ مطبَّق سابقاً (السطر 374) |
+| 3. TP2 failsafe clamps | ✅ مطبَّق سابقاً (السطور 389, 415) |
+| 4. Replace `alert.freq_all` → `alert.freq_once_per_bar` | ✅ no-op (صفر `freq_all` في الملف) |
+
+#### تفاصيل التعديل (Patch 1)
+
+**قبل:**
+```pine
+if barstate.isnew
+    buy_alert_sent    := false
+    sell_alert_sent   := false
+    rebuy_alert_sent  := false
+    resell_alert_sent := false
+    buy_break_sent    := false
+    sell_break_sent   := false
+    h1_break_sent     := false   ← يُعاد تعيينها كل chart bar
+    h4_break_sent     := false   ← يُعاد تعيينها كل chart bar
+```
+
+**بعد:**
+```pine
+if barstate.isnew
+    buy_alert_sent    := false
+    sell_alert_sent   := false
+    rebuy_alert_sent  := false
+    resell_alert_sent := false
+    buy_break_sent    := false
+    sell_break_sent   := false
+
+if h1_just_closed
+    h1_break_sent := false       ← يُعاد تعيينها فقط عند H1 close
+if h4_just_closed
+    h4_break_sent := false       ← يُعاد تعيينها فقط عند H4 close
+```
+
+#### لماذا هذا الإصلاح ضروري
+
+الـ H1/H4 BREAK alerts تستخدم `alert.freq_once_per_bar_close` (من patch سابق) الذي يتطلّب أن يُستدعى `alert()` على tick الإغلاق للـ chart bar. مع النمط القديم:
+
+- Tick 1 من chart bar: `barstate.isnew` true → reset latch → الشرط يطلق → `latch := true` → alert() يُستدعى ✓
+- Tick 2-N من نفس chart bar: latch=true → الشرط يُتجاوز → alert() **لا** يُستدعى
+- Closing tick: latch=true → الشرط يُتجاوز → alert() **لا** يُستدعى ✗
+- النتيجة: `freq_once_per_bar_close` لا يصدر التنبيه (لأنه يتطلّب call على closing tick)
+
+مع النمط الجديد:
+- كل tick من chart bar حيث `h1_just_closed=true`: latch يُعاد تعيينه → الشرط يطلق → alert() يُستدعى
+- closing tick أيضاً يستدعي alert() → `freq_once_per_bar_close` يصدر التنبيه مرة واحدة ✓
+
+#### المنطق المُجمَّد (لم يتغير)
+- ✅ `final_buy_break` / `final_sell_break` — صفر تغيير
+- ✅ `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` — صفر تغيير
+- ✅ Unlock logic, mode engine, TP engine, rendering, object pools — صفر تغيير
+- ✅ M15 break latches (`buy_break_sent`, `sell_break_sent`) — صفر تغيير (التوجيه خصّ H1/H4 فقط)
