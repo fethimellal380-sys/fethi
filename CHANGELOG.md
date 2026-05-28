@@ -134,3 +134,35 @@
 ### 📦 الملف
 - `Gold_Sniper_V9.9_Hybrid_Stable.pine`
 - `max_boxes_count = max_labels_count = max_lines_count = 100` (headroom محفوظ).
+
+
+### V9.9 Hybrid Stable — Refinement Pass
+
+تعديلان دقيقان فوق نسخة Hybrid Stable الأولية، لا تمسّ الـ architecture:
+
+1. **REBUY / RESELL gates على الحافة البعيدة (FAR edge)**
+   - تصحيح `close[1]` ليُختبَر ضد الحافة البعيدة من الزون لا القريبة:
+     ```
+     rebuy_touch  = close[1] > top and low  <= bot + offset and close >= bot - offset
+     resell_touch = close[1] < bot and high >= top - offset and close <= top + offset
+     ```
+   - السابق كان `close[1] > bot` / `close[1] < top` — كان يسمح بـ retrace عشوائي عند تذبذب داخل الزون.
+   - النتيجة: ✅ الاتجاه الأصلي محفوظ، ✅ التعزيز الحقيقي، ✅ same-candle reinforcement، ✅ wick interaction نظيف، بدون retrace عشوائي.
+
+2. **Hide branch transition-only**
+   - حُذف الشرط الثالث `(ov_act and not show_trade)` من الـ hide branch — كان يطلق `box.set_*` كل tick أثناء حالة "hidden مستمرة".
+   - الآن ينفَّذ حصراً عند:
+     ```
+     (ov_act[1] and not ov_act) or (show_trade[1] and not show_trade)
+     ```
+   - أي على لحظة الـ transition فقط (active→inactive أو show_trade-on→off).
+   - النتيجة: ✅ no redundant set_* calls، ✅ no flickering، ✅ realtime stable overlays، خفّة إضافية على المحرك.
+
+#### ما لم يتغير (ثبات معتمد)
+- Break logic: `final_buy_break` / `final_sell_break` كما هي.
+- BUY/SELL touch: كما هي.
+- Object pool: `var box`/`var line`/`var label` فقط، **لا** `box.delete()`/`line.delete()`/`label.delete()` في أي مكان.
+- لا `alert()` للكسور داخل `f_zone` — الـ aggregation العالمي وحده هو من يبعث.
+- Multi-break consolidation: تنبيه واحد لكل دورة M15.
+- Palette: `tp_col`/`sl_col`/`entry_col`/`tp_line_col`/`sl_line_col`/`tp_border`/`sl_border` بقيم institutional gold، transparency ≥ 70 على البوكسات.
+- Alert format: `🟢 BUY` / `🟩 REBUY` / `🔴 SELL` / `🟥 RESELL` / `🟢⬆️ M15 BREAK` / `🔴⬇️ M15 BREAK` / `🟢⏫ MULTI` / `🔴⏬ MULTI`. بدون 🚀/💥/CONFIRMATION/TOUCH/@/Z1.

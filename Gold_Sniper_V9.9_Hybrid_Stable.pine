@@ -355,14 +355,19 @@ f_zone(enable, top, bot, name) =>
         // ── Hybrid Stable TOUCH LOGIC ────────────────────────────────
         // Pure geometric / wick-aware sniper conditions — no break_state, no mode
         // coupling, no body-only constraint.
+        //
+        // REBUY/RESELL gate on `close[1]` against the FAR edge (top for buy side,
+        // bot for sell side) — confirming the original direction is intact and
+        // killing random retrace activations. Same-candle reinforcement preserved.
+        //
         //   BUY    (entry  at top): prev close above top, wick into top, close held above top-offset
-        //   REBUY  (deeper at bot): prev close above bot, wick into bot, close held above bot-offset
+        //   REBUY  (deeper at bot): prev close above TOP, wick into bot, close held above bot-offset
         //   SELL   (entry  at bot): prev close below bot, wick into bot, close held below bot+offset
-        //   RESELL (deeper at top): prev close below top, wick into top, close held below top+offset
+        //   RESELL (deeper at top): prev close below BOT, wick into top, close held below top+offset
         bool buy_touch    = close[1] > top and low  <= top + offset and close >= top - offset
-        bool rebuy_touch  = close[1] > bot and low  <= bot + offset and close >= bot - offset
+        bool rebuy_touch  = close[1] > top and low  <= bot + offset and close >= bot - offset
         bool sell_touch   = close[1] < bot and high >= bot - offset and close <= bot + offset
-        bool resell_touch = close[1] < top and high >= top - offset and close <= top + offset
+        bool resell_touch = close[1] < bot and high >= top - offset and close <= top + offset
 
         bool can_open = not array.get(_lock_arr, 0) or array.get(_zone_arr, 0) == name
 
@@ -536,8 +541,11 @@ f_zone(enable, top, bot, name) =>
             label.set_text(lbl_mark, is_buy ? "▼" : "▲")
             label.set_style(lbl_mark, is_buy ? label.style_label_down : label.style_label_up)
         else
-            // Hide branch — fires ONLY on transitions or when show_trade is off.
-            if (ov_act[1] and not ov_act) or (show_trade[1] and not show_trade) or (ov_act and not show_trade)
+            // Hide branch — fires ONLY on real transitions
+            // (active→inactive or show_trade-on→off). NOT on every tick while in
+            // a steady "hidden" state. This eliminates redundant set_* calls and
+            // any residual flicker risk on realtime ticks.
+            if (ov_act[1] and not ov_act) or (show_trade[1] and not show_trade)
                 int   hide_x = bar_index
                 float hide_y = 0.0
                 box.set_lefttop(tp1_bx,         hide_x, hide_y)
