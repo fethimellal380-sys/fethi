@@ -364,10 +364,12 @@ f_zone(enable, top, bot, name) =>
         //   REBUY  (deeper at bot): prev close above TOP, wick into bot, close held above bot-offset
         //   SELL   (entry  at bot): prev close below bot, wick into bot, close held below bot+offset
         //   RESELL (deeper at top): prev close below BOT, wick into top, close held below top+offset
-        bool buy_touch    = close[1] > top and low  <= top + offset and close >= top - offset
-        bool rebuy_touch  = close[1] > top and low  <= bot + offset and close >= bot - offset
-        bool sell_touch   = close[1] < bot and high >= bot - offset and close <= bot + offset
-        bool resell_touch = close[1] < bot and high >= top - offset and close <= top + offset
+        bool has_prev = not na(close[1])
+
+        bool buy_touch    = has_prev and close[1] > top and low  <= top + offset and close >= top - offset
+        bool rebuy_touch  = has_prev and close[1] > top and low  <= bot + offset and close >= bot - offset
+        bool sell_touch   = has_prev and close[1] < bot and high >= bot - offset and close <= bot + offset
+        bool resell_touch = has_prev and close[1] < bot and high >= top - offset and close <= top + offset
 
         bool can_open = not array.get(_lock_arr, 0) or array.get(_zone_arr, 0) == name
 
@@ -376,11 +378,9 @@ f_zone(enable, top, bot, name) =>
         // Direction flip releases the global lock cleanly along with overlay.
         if mode == "BUY"
             if not b1_d and buy_touch and can_open
-                if ov_act and ov_dir == "SELL"
-                    ov_act := false
-                    array.set(_lock_arr, 0, false)
-                    array.set(_zone_arr, 0, "")
                 float tp2_calc = f_tp2_buy(top)
+                if math.abs(tp2_calc - top) < 0.01
+                    tp2_calc := top + 30
                 b1_d   := true
                 ov_act := true
                 ov_dir := "BUY"
@@ -391,24 +391,22 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not buy_alert_sent
-                    alert("🟢 BUY " + f_num(top), alert.freq_all)
+                    alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar)
                     buy_alert_sent := true
                     buy_evt        := true
             // REBUY — same-candle activation possible (sequential if, no else gate).
             if b1_d and not b2_d and rebuy_touch
                 b2_d := true
                 if not rebuy_alert_sent
-                    alert("🟩 REBUY " + f_num(bot), alert.freq_all)
+                    alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar)
                     rebuy_alert_sent := true
                     rebuy_evt        := true
 
         if mode == "SELL"
             if not s1_d and sell_touch and can_open
-                if ov_act and ov_dir == "BUY"
-                    ov_act := false
-                    array.set(_lock_arr, 0, false)
-                    array.set(_zone_arr, 0, "")
                 float tp2_calc = f_tp2_sell(bot)
+                if math.abs(tp2_calc - bot) < 0.01
+                    tp2_calc := bot - 30
                 s1_d   := true
                 ov_act := true
                 ov_dir := "SELL"
@@ -419,14 +417,14 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not sell_alert_sent
-                    alert("🔴 SELL " + f_num(bot), alert.freq_all)
+                    alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
                     sell_alert_sent := true
                     sell_evt        := true
             // RESELL — same-candle activation possible.
             if s1_d and not s2_d and resell_touch
                 s2_d := true
                 if not resell_alert_sent
-                    alert("🟥 RESELL " + f_num(top), alert.freq_all)
+                    alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar)
                     resell_alert_sent := true
                     resell_evt        := true
 
@@ -617,11 +615,12 @@ any_overlay_alive := oa1 or oa2 or oa3 or oa4 or oa5 or oa6 or oa7 or oa8 or oa9
 if barstate.isconfirmed
     if array.get(_lock_arr, 0) and not any_overlay_alive
         lock_idle_bars += 1
-        if lock_idle_bars >= 2
-            array.set(_lock_arr, 0, false)
-            array.set(_zone_arr, 0, "")
-            lock_idle_bars := 0
     else
+        lock_idle_bars := 0
+
+    if lock_idle_bars >= 2
+        array.set(_lock_arr, 0, false)
+        array.set(_zone_arr, 0, "")
         lock_idle_bars := 0
 
 //==================================================
@@ -720,14 +719,14 @@ float first_sell_to   = multi_sell_to
 // `new_buy_breaks == 1` and `new_buy_breaks > 1` are mutually exclusive,
 // so plain `if` (not `else if`) is intentional and matches spec.
 if new_buy_breaks == 1
-    alert("🟢⬆️ M15 BREAK [" + f_num(first_buy_from) + " ⟶ " + f_num(first_buy_to) + "]", alert.freq_all)
+    alert("🟢⬆️ M15 BREAK [" + f_num(first_buy_from) + " ⟶ " + f_num(first_buy_to) + "]", alert.freq_once_per_bar_close)
 if new_buy_breaks > 1
-    alert("🟢⏫ M15 MULTI BREAK [" + f_num(multi_buy_from) + " ⟶ " + f_num(multi_buy_to) + "]", alert.freq_all)
+    alert("🟢⏫ M15 MULTI BREAK [" + f_num(multi_buy_from) + " ⟶ " + f_num(multi_buy_to) + "]", alert.freq_once_per_bar_close)
 
 if new_sell_breaks == 1
-    alert("🔴⬇️ M15 BREAK [" + f_num(first_sell_from) + " ⟶ " + f_num(first_sell_to) + "]", alert.freq_all)
+    alert("🔴⬇️ M15 BREAK [" + f_num(first_sell_from) + " ⟶ " + f_num(first_sell_to) + "]", alert.freq_once_per_bar_close)
 if new_sell_breaks > 1
-    alert("🔴⏬ M15 MULTI BREAK [" + f_num(multi_sell_from) + " ⟶ " + f_num(multi_sell_to) + "]", alert.freq_all)
+    alert("🔴⏬ M15 MULTI BREAK [" + f_num(multi_sell_from) + " ⟶ " + f_num(multi_sell_to) + "]", alert.freq_once_per_bar_close)
 
 // H1/H4 confirmation alerts (single-shot per cycle, reformatted).
 bool h1_buy_break_global  = hb1 or hb2 or hb3 or hb4 or hb5 or hb6 or hb7 or hb8 or hb9 or hb10
@@ -736,13 +735,13 @@ bool h4_buy_break_global  = fb1 or fb2 or fb3 or fb4 or fb5 or fb6 or fb7 or fb8
 bool h4_sell_break_global = fs1 or fs2 or fs3 or fs4 or fs5 or fs6 or fs7 or fs8 or fs9 or fs10
 
 if h1_buy_break_global
-    alert("🟢⬆️ H1 BREAK", alert.freq_all)
+    alert("🟢⬆️ H1 BREAK", alert.freq_once_per_bar_close)
 if h1_sell_break_global
-    alert("🔴⬇️ H1 BREAK", alert.freq_all)
+    alert("🔴⬇️ H1 BREAK", alert.freq_once_per_bar_close)
 if h4_buy_break_global
-    alert("🟢⬆️ H4 BREAK", alert.freq_all)
+    alert("🟢⬆️ H4 BREAK", alert.freq_once_per_bar_close)
 if h4_sell_break_global
-    alert("🔴⬇️ H4 BREAK", alert.freq_all)
+    alert("🔴⬇️ H4 BREAK", alert.freq_once_per_bar_close)
 
 //==================================================
 // 🔔 alertcondition() hooks — TradingView "Add alert" UI

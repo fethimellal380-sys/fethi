@@ -189,3 +189,41 @@
 - ✅ Touch logic: BUY/SELL على الحافة القريبة، REBUY/RESELL على الحافة البعيدة (`close[1] > top` للـ rebuy، `close[1] < bot` للـ resell).
 - ✅ Break logic: `m15_h > top and m15_c > bot` / `m15_l < bot and m15_c < top` فقط، لا body-only، لا break_state arrays.
 - ❌ بدون UDT, lifecycle engine, institutional rotations, heavy anti-spam, architecture rewrite.
+
+
+### V9.9 Hybrid Stable — Six Surgical Hardening Patches
+
+ست تعديلات مستهدفة على نسخة Hybrid Stable. لا تغيير في الـ strategy logic أو الـ break logic أو الـ TP/SL math أو الـ unlock logic أو الـ rendering أو الـ object pools.
+
+1. **إزالة Reverse Direction Flip blocks**
+   - حُذف `if ov_act and ov_dir == "SELL"` من BUY activation و `if ov_act and ov_dir == "BUY"` من SELL activation.
+   - `ov_act := false` محفوظ في unlock logic (السطور 346, 353) و overlay removal (السطر 437) — لم يُمَس.
+   - النتيجة: لا cleanup عشوائي للـ overlay المعاكس عند activation جديد، الـ unlock الطبيعي وحده هو من يدير الـ cycle.
+
+2. **M15 / H1 / H4 BREAK alerts → `alert.freq_once_per_bar_close`**
+   - جميع الـ 8 break alerts (4 M15 single+multi، 2 H1، 2 H4) محوّلة من `freq_all` → `freq_once_per_bar_close`.
+   - يمنع التكرار realtime داخل نفس الـ bar.
+
+3. **Entry alerts → `alert.freq_once_per_bar`**
+   - 4 alerts (BUY / REBUY / SELL / RESELL) محوّلة من `freq_all` → `freq_once_per_bar`.
+   - يسمح بإطلاق فوري داخل الـ bar مع منع التكرار.
+
+4. **`has_prev` guard على touch logic**
+   - أُضيف `bool has_prev = not na(close[1])` قبل touch definitions.
+   - الأربعة touches الآن تبدأ بـ `has_prev and ...` لمنع false positives على أول bar أو بعد gaps في الداتا.
+
+5. **TP2 edge-case clamp**
+   - بعد `f_tp2_buy(top)`: إذا `math.abs(tp2_calc - top) < 0.01` → `tp2_calc := top + 30`.
+   - بعد `f_tp2_sell(bot)`: إذا `math.abs(tp2_calc - bot) < 0.01` → `tp2_calc := bot - 30`.
+   - يحمي من حالات tp2 = entry (zero-RR) عند زون أمامي بنفس مستوى الزون الحالي.
+
+6. **Deadlock recovery — restructured**
+   - تقسيم منطق `lock_idle_bars` إلى مرحلتين:
+     - مرحلة الزيادة/الإعادة: `lock_idle_bars += 1` إذا (locked & no overlay) و إلا `:= 0`.
+     - مرحلة الإفراج: `if lock_idle_bars >= 2` → release + reset.
+   - النتيجة: الـ release يفحص دائماً (حتى بعد إعادة الـ counter لـ 0 مباشرة) — أكثر متانة ضد race conditions.
+
+#### تأكيد المنطق المُجمَّد (لم يتغير)
+- Break logic: `final_buy_break = m15_h > top and m15_c > bot` + `final_sell_break = m15_l < bot and m15_c < top` — كما هي.
+- Touch logic: BUY/SELL على الحافة القريبة، REBUY/RESELL على الحافة البعيدة — كما هي + `has_prev` guard فقط.
+- Unlock logic، Overlay removal، Rendering system، Object pools، Architecture، Naming — صفر تغيير.
