@@ -404,7 +404,7 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not buy_alert_sent
-                    alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar)
+                    alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar_close)
                     buy_alert_sent := true
                     buy_evt        := true
             // REBUY — same-candle activation possible (sequential if, no else gate).
@@ -430,7 +430,7 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not sell_alert_sent
-                    alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
+                    alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar_close)
                     sell_alert_sent := true
                     sell_evt        := true
             // RESELL — same-candle activation possible.
@@ -468,7 +468,16 @@ f_zone(enable, top, bot, name) =>
         // the overlay does not disappear due to mid-bar ov_act flicker.
         r_idx = right_bar
 
-        if show_trade and (ov_act or b1_d or b2_d or s1_d or s2_d)
+        // ── Stable overlay visibility guard (visual-only, no strategy impact) ──
+        // overlay_visible draws while EITHER:
+        //   • the trade is currently active (ov_act), OR
+        //   • a per-zone state flag survives a transient ov_act flicker AND this
+        //     zone still owns the global lock (zone name match). After TP2/SL or
+        //     unlock, the lock is released and the second clause becomes false,
+        //     so the overlay disappears cleanly without flicker.
+        bool overlay_visible = ov_act or ((b1_d or b2_d or s1_d or s2_d) and array.get(_zone_arr, 0) == name)
+
+        if show_trade and overlay_visible
             float top_y   = top
             float bot_y   = bot
             float tp2_y   = tp2_v

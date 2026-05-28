@@ -369,3 +369,59 @@ if h4_just_closed
 - ✅ touch geometry (السطور 382-385)
 - ✅ كل state setting (b1_d/b2_d/s1_d/s2_d, ov_act, ov_dir, e_bar, tp1_v, tp2_v, sl_v, lock acquisition)
 - ✅ TP/SL math، التعزيز، الاتجاه، الرسم، object pools، architecture، palette
+
+
+### V9.9 Hybrid Stable — SAFE FIX PACK (Stability Only)
+
+تعديلان دقيقان (2 fixes فقط) بدون مساس بأي شيء يخص الاستراتيجية أو الـ entry/exit/TP/SL/mode/touch/break/unlock.
+
+#### SAFE FIX #1 — Unify BUY/SELL alerts with close-confirmed architecture
+
+كل تنبيهات الـ entries (BUY/SELL/REBUY/RESELL) أصبحت موحَّدة على `alert.freq_once_per_bar_close`:
+
+```diff
+- alert("🟢 BUY "  + f_num(top), alert.freq_once_per_bar)
++ alert("🟢 BUY "  + f_num(top), alert.freq_once_per_bar_close)
+
+- alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
++ alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar_close)
+```
+
+(REBUY/RESELL كانتا بالفعل على `freq_once_per_bar_close` من الـ Final Critical Completion Patch السابق.)
+
+النتيجة: الـ asymmetry السابقة بين BUY/SELL و REBUY/RESELL أُلغيت. كل الأربعة يلتزمن بنفس آلية تأكيد إغلاق الـ bar.
+
+#### SAFE FIX #2 — Stable overlay visibility guard
+
+أُضيف متغيّر `overlay_visible` جديد يوحّد منطق ظهور الـ overlay مع شرط ملكية الـ zone للـ global lock:
+
+```pine
+bool overlay_visible =
+     ov_act or
+     ((b1_d or b2_d or s1_d or s2_d) and array.get(_zone_arr, 0) == name)
+
+if show_trade and overlay_visible
+    ...
+```
+
+السطر 471 السابق كان `if show_trade and (ov_act or b1_d or b2_d or s1_d or s2_d)`. الفرق المفصلي: الفرع الثاني الآن مشروط بـ `array.get(_zone_arr, 0) == name`.
+
+**ما يصلحه هذا الـ guard:**
+
+1. **Realtime stability** ✅ — إذا flicker لـ `ov_act` (false مؤقتاً ثم true)، فإن `b1_d`/`s1_d` المُحقَّقة + ملكية الـ zone للـ lock تبقي الـ overlay مرسوماً، فلا flicker.
+
+2. **اختفاء نظيف بعد TP2/SL** ✅ — عند ضربة TP2/SL، يُمسح `_zone_arr` (lock release). على الـ tick التالي:
+   - `ov_act = false`
+   - `(b1_d=true) and (_zone_arr == name)` → `false` (لأن `_zone_arr=""`)
+   - `overlay_visible = false` → الـ overlay يختفي ✅
+   
+   هذا يُصلح الـ side effect الذي أشرتُ إليه في FIX 7 من الـ Confirmed-Bar Hardening Pass السابق (overlay كان يبقى بعد TP2/SL).
+
+3. **عزل بين الـ zones** ✅ — كل zone ترسم فقط عندما تكون هي مالكة الـ lock. لا تتداخل overlays من zones مختلفة.
+
+#### المنطق المُجمَّد (تأكيد نهائي — صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 297-298)
+- ✅ touch geometry — buy/sell/rebuy/resell touches (السطور 382-385)
+- ✅ Mode flow، unlock engine، TP/SL math، التعزيز، الاتجاه
+- ✅ Object pools، rendering pipeline، architecture، palette
+- ✅ Break conditions، entry/exit gates
