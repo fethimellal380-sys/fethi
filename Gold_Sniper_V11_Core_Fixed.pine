@@ -79,14 +79,12 @@ f_tp2_sell(float c_bot, array<bool> en, array<float> top_a, array<float> bot_a) 
 //==================================================
 // 🛰️ MTF FETCH — HARDENED PRODUCTION VERSION
 //==================================================
-bool valid_tf = timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
-
-float m15_close_r = na
-float m15_high_r  = na
-float m15_low_r   = na
-
-if valid_tf
-    [m15_close_r, m15_high_r, m15_low_r] := request.security(syminfo.tickerid, "15", [close, high, low], lookahead=barmerge.lookahead_off)
+[m15_close_r, m15_high_r, m15_low_r] = request.security(
+     syminfo.tickerid,
+     "15",
+     [close, high, low],
+     lookahead = barmerge.lookahead_off
+ )
 
 m15_event = ta.change(time("15")) != 0
 
