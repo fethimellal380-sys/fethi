@@ -399,13 +399,8 @@ for i = 0 to 9
                 line.set_xy2(sc_ln, bar_index, close)
 
 //==================================================
-// 🚀 نظام الكسور المتتالية المدمجة
+// 🚀 نظام الكسور المتتالية
 //==================================================
 if m15_event
-    if new_buy_breaks > 0
-        consecutive_buy_count += new_buy_breaks
-        consecutive_sell_count := 0
-
-    if new_sell_breaks > 0
-        consecutive_sell_count += new_sell_breaks
-        consecutive_buy_count := 0
+    consecutive_buy_count  := new_buy_breaks  > 0 ? consecutive_buy_count + new_buy_breaks : 0
+    consecutive_sell_count := new_sell_breaks > 0 ? consecutive_sell_count + new_sell_breaks : 0
