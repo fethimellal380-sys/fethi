@@ -221,8 +221,12 @@ for i = 0 to 9
         // ===== ✅ STRICT INSTITUTIONAL BODY BREAK LOGIC =====
         if m15_event and not na(m15_close_r) and not na(m15_high_r) and not na(m15_low_r)
 
-            bool valid_buy_break  = m15_close_r > top_v and m15_high_r > top_v
-            bool valid_sell_break = m15_close_r < bot_v and m15_low_r < bot_v
+            // ===== ⚡ PARTIAL BODY BREAK LOGIC (V9 ORIGINAL) =====
+            float body_top = math.max(m15_close_r, open)
+            float body_bot = math.min(m15_close_r, open)
+
+            bool valid_buy_break  = body_top > top_v
+            bool valid_sell_break = body_bot < bot_v
 
             bool final_buy_break  = valid_buy_break and not valid_sell_break
             bool final_sell_break = valid_sell_break and not valid_buy_break
@@ -247,12 +251,17 @@ for i = 0 to 9
                     if array.get(break_state_m15, i) != "NONE"
                         array.set(break_state_m15, i, "NONE")
 
-        // ===== ✅ STRICT TOUCH FILTER WITH STRUCTURE REQUIREMENT =====
-        bool buy_touch  = low <= top_v and close >= top_v - offset and close <= top_v + offset and array.get(break_state_m15, i) == "UP"
-        bool sell_touch = high >= bot_v and close <= bot_v + offset and close >= bot_v - offset and array.get(break_state_m15, i) == "DOWN"
+        // ===== 🎯 PURE SNIPER TOUCH LOGIC (V9 STYLE) =====
+        bool buy_touch =
+             low <= top_v
+         and close >= top_v - offset
 
-        bool final_buy_touch  = buy_touch and not sell_touch
-        bool final_sell_touch = sell_touch and not buy_touch
+        bool sell_touch =
+             high >= bot_v
+         and close <= bot_v + offset
+
+        bool final_buy_touch  = buy_touch
+        bool final_sell_touch = sell_touch
 
         // ===== ⚡ EXECUTION ENGINE =====
         if final_buy_touch and not array.get(buy_touch_mem, i) and not array.get(active_buy_overlay, i)
