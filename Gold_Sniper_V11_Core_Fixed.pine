@@ -413,3 +413,42 @@ for i = 0 to 9
 if m15_event
     consecutive_buy_count  := new_buy_breaks  > 0 ? consecutive_buy_count + new_buy_breaks : 0
     consecutive_sell_count := new_sell_breaks > 0 ? consecutive_sell_count + new_sell_breaks : 0
+
+
+if m15_event
+
+    // ===== ⬆️ BUY BREAKS
+    if new_buy_breaks == 1
+        alert(
+         "⚡⬆️ كسر M15 ○ [" +
+         f_num(first_buy_bot) + " ⟶ " +
+         f_num(last_buy_top) + "]",
+         alert.freq_once_per_bar_close)
+
+    else if new_buy_breaks > 1
+        alert(
+         "⚡⏫ كسر متتالي M15 ○ [" +
+         f_num(first_buy_bot) + " ⟶ " +
+         f_num(last_buy_top) + "]",
+         alert.freq_once_per_bar_close)
+
+    // ===== ⬇️ SELL BREAKS
+    if new_sell_breaks == 1
+        alert(
+         "⚡⬇️ كسر M15 ● [" +
+         f_num(last_sell_bot) + " ⟶ " +
+         f_num(first_sell_top) + "]",
+         alert.freq_once_per_bar_close)
+
+    else if new_sell_breaks > 1
+        alert(
+         "⚡⏬ كسر متتالي M15 ● [" +
+         f_num(last_sell_bot) + " ⟶ " +
+         f_num(first_sell_top) + "]",
+         alert.freq_once_per_bar_close)
+
+    // RESET
+    first_buy_bot  := na
+    last_buy_top   := na
+    first_sell_top := na
+    last_sell_bot  := na
