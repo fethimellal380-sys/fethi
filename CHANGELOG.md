@@ -338,3 +338,34 @@ if h4_just_closed
 - `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` — صفر تغيير (السطور 382-385).
 - شروط BUY/SELL/REBUY/RESELL activation — صفر تغيير.
 - TP/SL math، التعزيز، الرسم المؤسسي، object pools، architecture، palette — صفر تغيير.
+
+
+### V9.9 Hybrid Stable — Final Critical Completion Patch
+
+تعديل جراحي على frequency لـ REBUY/RESELL alerts فقط، مطابقاً للـ spec المُرسَل:
+
+#### تحليل الـ patch
+
+| البند | الحالة قبل | المطلوب | الإجراء |
+|---|---|---|---|
+| BUY state setting (ov_act/ov_dir/e_bar/tp1/tp2/sl/lock) بعد `b1_d := true` | ✅ مطبَّق سابقاً | مطلوب | لا تغيير |
+| BUY alert ("complete as is") | `freq_once_per_bar` | unchanged | لا تغيير |
+| SELL state setting بعد `s1_d := true` | ✅ مطبَّق سابقاً | مطلوب | لا تغيير |
+| SELL alert ("complete as is") | `freq_once_per_bar` | unchanged | لا تغيير |
+| **REBUY alert frequency** | `freq_once_per_bar` | `freq_once_per_bar_close` | ⚠️ **تم تعديله** |
+| **RESELL alert frequency** | `freq_once_per_bar` | `freq_once_per_bar_close` | ⚠️ **تم تعديله** |
+| REBUY/RESELL: لا reset | ✅ لا يوجد | لا reset | لا تغيير |
+
+#### الـ asymmetry المقصودة
+
+السلوك بعد التعديل:
+- **BUY / SELL** (entries): `alert.freq_once_per_bar` — تنبيه فوري على أول tick داخل الـ bar.
+- **REBUY / RESELL** (reinforcements): `alert.freq_once_per_bar_close` — تنبيه على إغلاق الـ bar للتأكيد.
+
+التصميم: الدخول الأولي يُطلَق بسرعة، أما التعزيز فيُؤكَّد على إغلاق الـ bar.
+
+#### المنطق المُجمَّد (تأكيد نهائي — صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 297-298)
+- ✅ touch geometry (السطور 382-385)
+- ✅ كل state setting (b1_d/b2_d/s1_d/s2_d, ov_act, ov_dir, e_bar, tp1_v, tp2_v, sl_v, lock acquisition)
+- ✅ TP/SL math، التعزيز، الاتجاه، الرسم، object pools، architecture، palette

@@ -411,7 +411,7 @@ f_zone(enable, top, bot, name) =>
             if b1_d and not b2_d and rebuy_touch
                 b2_d := true
                 if not rebuy_alert_sent
-                    alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar)
+                    alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar_close)
                     rebuy_alert_sent := true
                     rebuy_evt        := true
 
@@ -437,7 +437,7 @@ f_zone(enable, top, bot, name) =>
             if s1_d and not s2_d and resell_touch
                 s2_d := true
                 if not resell_alert_sent
-                    alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar)
+                    alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar_close)
                     resell_alert_sent := true
                     resell_evt        := true
 
