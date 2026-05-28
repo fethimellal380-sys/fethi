@@ -1,0 +1,750 @@
+//@version=5
+// Gold Sniper V9.9 Hybrid Stable Edition — Real-Time Liquidity Radar
+//
+// Surgical fixes layered on top of V9.9 Final base — architecture, object pools,
+// engine flow, varip state machine, and global lock pattern preserved as-is.
+//
+// Patches applied:
+//   1) Break logic — final_buy_break / final_sell_break (high+close / low+close)
+//   2) Touch logic — buy_touch / sell_touch / rebuy_touch / resell_touch
+//      (prev-close gate + wick-aware geometry, no body-only constraint)
+//   3) Stable realtime overlay redraw (hide branch only on transitions)
+//   4) Multi-break consolidation (single alert per M15 cycle, no spam)
+//   5) Clean alert formatting (institutional pills, no 🚀/💥/CONFIRMATION/Z1)
+//   6) Institutional gold palette (transparency >= 70 on box surfaces)
+//
+// 10 zones × per-zone object pool { 8 boxes + 4 lines + 6 labels }
+//   = 80 / 60 / 40 used. Counts kept at 100 for safe headroom.
+indicator("Gold Sniper V9.9 Hybrid Stable Edition", overlay = true, max_boxes_count = 100, max_labels_count = 100, max_lines_count = 100)
+
+//==================================================
+// ⚙️ الإعدادات
+//==================================================
+grp_gen     = "الإعدادات العامة"
+offset      = input.float(0.5, "Offset", minval = 0.1, step = 0.1, group = grp_gen)
+label_off   = input.int(0, "إزاحة الأرقام", minval = -50, maxval = 200, step = 1, group = grp_gen)
+future_bars = input.int(20, "Future Bars", minval = 1, maxval = 200, step = 1, group = grp_gen)
+show_trade  = input.bool(true, "إظهار رسم الصفقة (Entry / TP / SL)", group = grp_gen)
+
+grp_col = "ألوان المناطق"
+buy_c   = input.color(color.new(#22C55E, 82), "لون الشراء", group = grp_col)
+sell_c  = input.color(color.new(#EF4444, 82), "لون البيع",  group = grp_col)
+
+grp_htf      = "Higher Timeframe Breaks"
+use_h1_break = input.bool(false, "تفعيل كسر H1", group = grp_htf)
+use_h4_break = input.bool(false, "تفعيل كسر H4", group = grp_htf)
+
+// === Institutional gold palette (transparency >= 70 on box surfaces) ==============
+// Lines may be more opaque (thin elements). Boxes stay light to keep gold readable.
+var color tp_col      = color.new(#3B82F6, 84)
+var color tp_border   = color.new(#2563EB, 25)
+var color sl_col      = color.new(#EF4444, 88)
+var color sl_border   = color.new(#DC2626, 20)
+var color entry_col   = color.new(#FACC15, 10)
+var color tp_line_col = color.new(#2563EB, 15)
+var color sl_line_col = color.new(#DC2626, 15)
+
+// Derived box fills (always >= 70 transparency to stay light on gold)
+var color box_tp     = tp_col                       // 84
+var color box_sl     = sl_col                       // 88
+var color box_entry  = color.new(#FACC15, 70)
+var color box_eglow  = color.new(#FACC15, 85)
+var color ZONE_NEUT  = color.new(color.gray, 85)
+
+// Floating-label palette (premium pill aesthetic)
+var color LBL_E_C    = color.new(#0F1116, 8)
+var color LBL_TP_C   = color.new(#1D4ED8, 8)
+var color LBL_SL_C   = color.new(#EF4444, 50)
+var color LBL_MARK_C = color.new(#FACC15, 15)
+
+// Global execution lock — only ONE overlay cycle active across all 10 zones.
+// Stored in single-element arrays so f_zone() can mutate via array.set()
+// (Pine v5 forbids direct global assignment from inside a function).
+varip _lock_arr = array.new_bool(1, false)
+varip _zone_arr = array.new_string(1, "")
+
+//==================================================
+// 🛠️ Helpers
+//==================================================
+f_num(x) => str.tostring(x, "#.##")
+v(s)     => nz(str.tonumber(s))
+
+right_bar = bar_index + future_bars
+
+//==================================================
+// 🧱 Multi-timeframe structural data (M15 / H1 / H4)
+//==================================================
+// lookahead_off → series at chart-bar T = data of the most recently CLOSED HTF bar.
+// At the chart bar where m15_just_closed flips true, m15_h[0] / m15_l[0] / m15_c[0]
+// hold the just-closed M15 bar's high/low/close. Anti-repaint by construction.
+[m15_o, m15_c, m15_h, m15_l] = request.security(syminfo.tickerid, "15",  [open, close, high, low], lookahead = barmerge.lookahead_off)
+[h1_o,  h1_c,  h1_h,  h1_l]  = request.security(syminfo.tickerid, "60",  [open, close, high, low], lookahead = barmerge.lookahead_off)
+[h4_o,  h4_c,  h4_h,  h4_l]  = request.security(syminfo.tickerid, "240", [open, close, high, low], lookahead = barmerge.lookahead_off)
+
+m15_just_closed = ta.change(time("15"))  != 0
+h1_just_closed  = ta.change(time("60"))  != 0
+h4_just_closed  = ta.change(time("240")) != 0
+
+// M15-bar counter (chart-TF independent cooldown).
+varip int m15_bar_counter = 0
+if m15_just_closed
+    m15_bar_counter += 1
+
+// === Global lock liveness counter — DEADLOCK PROTECTION ===
+// any_overlay_alive aggregates ov_act across all 10 zones (assigned in dispatch loop).
+// If the global lock is set but no zone reports an active overlay for 2+ confirmed
+// chart bars, the lock is presumed stale and force-released.
+var bool any_overlay_alive = false
+varip int lock_idle_bars   = 0
+
+//==================================================
+// 📥 المناطق العشر
+//==================================================
+z1   = input.bool(true,  "1",  inline = "1")
+v1_t = v(input.string("4574.68", "T", inline = "1"))
+v1_b = v(input.string("4570.38", "B", inline = "1"))
+
+z2   = input.bool(true,  "2",  inline = "2")
+v2_t = v(input.string("4563", "T", inline = "2"))
+v2_b = v(input.string("4560", "B", inline = "2"))
+
+z3   = input.bool(true,  "3",  inline = "3")
+v3_t = v(input.string("4555.44", "T", inline = "3"))
+v3_b = v(input.string("4551.82", "B", inline = "3"))
+
+z4   = input.bool(true,  "4",  inline = "4")
+v4_t = v(input.string("4535.65", "T", inline = "4"))
+v4_b = v(input.string("4533.82", "B", inline = "4"))
+
+z5   = input.bool(true,  "5",  inline = "5")
+v5_t = v(input.string("4530.01", "T", inline = "5"))
+v5_b = v(input.string("4524.45", "B", inline = "5"))
+
+z6   = input.bool(true,  "6",  inline = "6")
+v6_t = v(input.string("4503.4", "T", inline = "6"))
+v6_b = v(input.string("4497.25", "B", inline = "6"))
+
+z7   = input.bool(true,  "7",  inline = "7")
+v7_t = v(input.string("4473.34", "T", inline = "7"))
+v7_b = v(input.string("4468.6",  "B", inline = "7"))
+
+z8    = input.bool(true,  "8",  inline = "8")
+v8_t  = v(input.string("", "T", inline = "8"))
+v8_b  = v(input.string("", "B", inline = "8"))
+
+z9    = input.bool(true,  "9",  inline = "9")
+v9_t  = v(input.string("", "T", inline = "9"))
+v9_b  = v(input.string("", "B", inline = "9"))
+
+z10   = input.bool(true,  "10", inline = "10")
+v10_t = v(input.string("", "T", inline = "10"))
+v10_b = v(input.string("", "B", inline = "10"))
+
+//==================================================
+// 🔍 Body-confirmed unlock helpers (preserved from V9.9 Final)
+//==================================================
+f_unlock_sell(t, o, c) => (z1 and v1_b > t and (o >= v1_b or c >= v1_b) and c <= v1_b + offset) or (z2 and v2_b > t and (o >= v2_b or c >= v2_b) and c <= v2_b + offset) or (z3 and v3_b > t and (o >= v3_b or c >= v3_b) and c <= v3_b + offset) or (z4 and v4_b > t and (o >= v4_b or c >= v4_b) and c <= v4_b + offset) or (z5 and v5_b > t and (o >= v5_b or c >= v5_b) and c <= v5_b + offset) or (z6 and v6_b > t and (o >= v6_b or c >= v6_b) and c <= v6_b + offset) or (z7 and v7_b > t and (o >= v7_b or c >= v7_b) and c <= v7_b + offset) or (z8 and v8_b > t and (o >= v8_b or c >= v8_b) and c <= v8_b + offset) or (z9 and v9_b > t and (o >= v9_b or c >= v9_b) and c <= v9_b + offset) or (z10 and v10_b > t and (o >= v10_b or c >= v10_b) and c <= v10_b + offset)
+
+f_unlock_buy(b, o, c) => (z1 and v1_t < b and (o <= v1_t or c <= v1_t) and c >= v1_t - offset) or (z2 and v2_t < b and (o <= v2_t or c <= v2_t) and c >= v2_t - offset) or (z3 and v3_t < b and (o <= v3_t or c <= v3_t) and c >= v3_t - offset) or (z4 and v4_t < b and (o <= v4_t or c <= v4_t) and c >= v4_t - offset) or (z5 and v5_t < b and (o <= v5_t or c <= v5_t) and c >= v5_t - offset) or (z6 and v6_t < b and (o <= v6_t or c <= v6_t) and c >= v6_t - offset) or (z7 and v7_t < b and (o <= v7_t or c <= v7_t) and c >= v7_t - offset) or (z8 and v8_t < b and (o <= v8_t or c <= v8_t) and c >= v8_t - offset) or (z9 and v9_t < b and (o <= v9_t or c <= v9_t) and c >= v9_t - offset) or (z10 and v10_t < b and (o <= v10_t or c <= v10_t) and c >= v10_t - offset)
+
+//==================================================
+// 🎯 TP2 Engine — opposite-zone target with min-gap validation (preserved)
+//==================================================
+f_tp2_buy(t) =>
+    float min_gap     = 5.0
+    float fallback_dx = 30.0
+    float r           = t + fallback_dx
+    if z1  and v1_b  > t + min_gap
+        r := math.min(r, v1_b)
+    if z2  and v2_b  > t + min_gap
+        r := math.min(r, v2_b)
+    if z3  and v3_b  > t + min_gap
+        r := math.min(r, v3_b)
+    if z4  and v4_b  > t + min_gap
+        r := math.min(r, v4_b)
+    if z5  and v5_b  > t + min_gap
+        r := math.min(r, v5_b)
+    if z6  and v6_b  > t + min_gap
+        r := math.min(r, v6_b)
+    if z7  and v7_b  > t + min_gap
+        r := math.min(r, v7_b)
+    if z8  and v8_b  > t + min_gap
+        r := math.min(r, v8_b)
+    if z9  and v9_b  > t + min_gap
+        r := math.min(r, v9_b)
+    if z10 and v10_b > t + min_gap
+        r := math.min(r, v10_b)
+    r
+
+f_tp2_sell(b) =>
+    float min_gap     = 5.0
+    float fallback_dx = 30.0
+    float r           = b - fallback_dx
+    if z1  and v1_t  < b - min_gap
+        r := math.max(r, v1_t)
+    if z2  and v2_t  < b - min_gap
+        r := math.max(r, v2_t)
+    if z3  and v3_t  < b - min_gap
+        r := math.max(r, v3_t)
+    if z4  and v4_t  < b - min_gap
+        r := math.max(r, v4_t)
+    if z5  and v5_t  < b - min_gap
+        r := math.max(r, v5_t)
+    if z6  and v6_t  < b - min_gap
+        r := math.max(r, v6_t)
+    if z7  and v7_t  < b - min_gap
+        r := math.max(r, v7_t)
+    if z8  and v8_t  < b - min_gap
+        r := math.max(r, v8_t)
+    if z9  and v9_t  < b - min_gap
+        r := math.max(r, v9_t)
+    if z10 and v10_t < b - min_gap
+        r := math.max(r, v10_t)
+    r
+
+//==================================================
+// 🧠 Zone Engine — V9.9 architecture preserved, surgical fixes only
+//==================================================
+f_zone(enable, top, bot, name) =>
+    // ── Persistent state ─────────────────────────────────────────────
+    varip string mode   = "NONE"
+    varip bool b1_d     = false
+    varip bool b2_d     = false
+    varip bool s1_d     = false
+    varip bool s2_d     = false
+    varip bool ov_act   = false
+    varip string ov_dir = "NONE"
+    varip int   e_bar   = bar_index
+    varip float tp2_v   = 0.0
+    varip float tp1_v   = 0.0
+    varip float sl_v    = 0.0
+
+    // ── Per-bar latches (anti-repeat alerts) ─────────────────────────
+    varip bool buy_alert_sent    = false
+    varip bool sell_alert_sent   = false
+    varip bool rebuy_alert_sent  = false
+    varip bool resell_alert_sent = false
+    varip bool buy_break_sent    = false
+    varip bool sell_break_sent   = false
+    varip bool h1_break_sent     = false
+    varip bool h4_break_sent     = false
+    varip int  last_flip_m15     = -10
+
+    // ── Replay / reload hardening ────────────────────────────────────
+    if barstate.isfirst
+        b1_d   := false
+        b2_d   := false
+        s1_d   := false
+        s2_d   := false
+        ov_act := false
+        ov_dir := "NONE"
+        mode   := "NONE"
+        array.set(_lock_arr, 0, false)
+        array.set(_zone_arr, 0, "")
+
+    if barstate.isnew
+        buy_alert_sent    := false
+        sell_alert_sent   := false
+        rebuy_alert_sent  := false
+        resell_alert_sent := false
+        buy_break_sent    := false
+        sell_break_sent   := false
+        h1_break_sent     := false
+        h4_break_sent     := false
+
+    // ── Per-call event flags (returned for global aggregation) ───────
+    bool buy_break_evt     = false
+    bool sell_break_evt    = false
+    bool buy_evt           = false
+    bool sell_evt          = false
+    bool rebuy_evt         = false
+    bool resell_evt        = false
+    bool h1_buy_break_evt  = false
+    bool h1_sell_break_evt = false
+    bool h4_buy_break_evt  = false
+    bool h4_sell_break_evt = false
+
+    // ── Persistent overlay object pool (preserved from V9.9) ─────────
+    var box   tp1_bx     = box.new(0, 0, 0, 0, border_width = 0)
+    var box   tp2_out_bx = box.new(0, 0, 0, 0, border_width = 1, border_color = tp_border)
+    var box   tp2_mid_bx = box.new(0, 0, 0, 0, border_width = 0)
+    var box   tp2_in_bx  = box.new(0, 0, 0, 0, border_width = 0)
+    var box   sl_bx      = box.new(0, 0, 0, 0, border_width = 1, border_color = sl_border)
+    var box   e_glow_bx  = box.new(0, 0, 0, 0, border_width = 0)
+    var box   e_bx       = box.new(0, 0, 0, 0, border_width = 0)
+    var line  t1_ln      = line.new(0, 0, 0, 0, color = tp_border,    style = line.style_dashed, width = 1)
+    var line  t2_ln      = line.new(0, 0, 0, 0, color = tp_line_col,  style = line.style_solid,  width = 2)
+    var line  sl_ln      = line.new(0, 0, 0, 0, color = sl_line_col,  style = line.style_solid,  width = 1)
+    var line  e_ln       = line.new(0, 0, 0, 0, color = entry_col,    style = line.style_dashed, width = 1)
+    var label lbl_e      = label.new(0, 0, "", style = label.style_label_left, color = LBL_E_C,    textcolor = color.white, size = size.small)
+    var label lbl_t1     = label.new(0, 0, "", style = label.style_label_left, color = LBL_TP_C,   textcolor = color.white, size = size.small)
+    var label lbl_t2     = label.new(0, 0, "", style = label.style_label_left, color = LBL_TP_C,   textcolor = color.white, size = size.small)
+    var label lbl_sl     = label.new(0, 0, "", style = label.style_label_left, color = LBL_SL_C,   textcolor = color.white, size = size.small)
+    var label lbl_mark   = label.new(0, 0, "", style = label.style_label_down, color = LBL_MARK_C, textcolor = #0F1116,     size = size.small, textalign = text.align_center)
+
+    // ── Hybrid Stable BREAK LOGIC ────────────────────────────────────
+    // BUY break  : M15 high cleared zone top   AND M15 close held above zone bot.
+    // SELL break : M15 low  pierced zone bot   AND M15 close held below zone top.
+    // Wick-aware participation (high/low) + structural confirmation (close inside/past).
+    // No body-only constraint, no mode coupling, no break_state intermediates.
+    bool final_buy_break  = m15_h > top and m15_c > bot
+    bool final_sell_break = m15_l < bot and m15_c < top
+
+    // H1/H4 confirmation layers (informational only — do NOT alter mode/rotation)
+    bool h1_buy_break_ok  = h1_h > top and h1_c > bot
+    bool h1_sell_break_ok = h1_l < bot and h1_c < top
+    bool h4_buy_break_ok  = h4_h > top and h4_c > bot
+    bool h4_sell_break_ok = h4_l < bot and h4_c < top
+
+    bool cooldown_ok = (m15_bar_counter - last_flip_m15) > 1
+
+    // Mode flip on M15 close — alerts emitted at GLOBAL aggregation layer
+    // (multi-break aware, single message per cycle).
+    if m15_just_closed
+        if final_buy_break and mode != "BUY" and not buy_break_sent and cooldown_ok
+            mode := "BUY"
+            last_flip_m15  := m15_bar_counter
+            buy_break_sent := true
+            buy_break_evt  := true
+        else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
+            mode := "SELL"
+            last_flip_m15   := m15_bar_counter
+            sell_break_sent := true
+            sell_break_evt  := true
+
+    if use_h1_break and h1_just_closed and not h1_break_sent
+        if h1_buy_break_ok
+            h1_break_sent     := true
+            h1_buy_break_evt  := true
+        else if h1_sell_break_ok
+            h1_break_sent     := true
+            h1_sell_break_evt := true
+
+    if use_h4_break and h4_just_closed and not h4_break_sent
+        if h4_buy_break_ok
+            h4_break_sent     := true
+            h4_buy_break_evt  := true
+        else if h4_sell_break_ok
+            h4_break_sent     := true
+            h4_sell_break_evt := true
+
+    if enable and top > bot
+        // ── Unlock Logic — body-confirmed opposite-zone interaction ──
+        // Min overlay lifetime guard: unlock cannot fire within first `min_live_bars`
+        // of an active overlay. Prevents instant self-cancel from intrabar volatility.
+        // Entries / alerts / TP / SL untouched.
+        int  min_live_bars  = 2
+        bool can_unlock     = (bar_index - e_bar) >= min_live_bars
+        bool buy_unlock_ok  = f_unlock_sell(top, open, close)
+        bool sell_unlock_ok = f_unlock_buy(bot,  open, close)
+        if can_unlock and (b1_d or b2_d) and buy_unlock_ok
+            b1_d   := false
+            b2_d   := false
+            if ov_act and array.get(_zone_arr, 0) == name
+                array.set(_lock_arr, 0, false)
+                array.set(_zone_arr, 0, "")
+            ov_act := false
+        if can_unlock and (s1_d or s2_d) and sell_unlock_ok
+            s1_d   := false
+            s2_d   := false
+            if ov_act and array.get(_zone_arr, 0) == name
+                array.set(_lock_arr, 0, false)
+                array.set(_zone_arr, 0, "")
+            ov_act := false
+
+        // ── Hybrid Stable TOUCH LOGIC ────────────────────────────────
+        // Pure geometric / wick-aware sniper conditions — no break_state, no mode
+        // coupling, no body-only constraint.
+        //   BUY    (entry  at top): prev close above top, wick into top, close held above top-offset
+        //   REBUY  (deeper at bot): prev close above bot, wick into bot, close held above bot-offset
+        //   SELL   (entry  at bot): prev close below bot, wick into bot, close held below bot+offset
+        //   RESELL (deeper at top): prev close below top, wick into top, close held below top+offset
+        bool buy_touch    = close[1] > top and low  <= top + offset and close >= top - offset
+        bool rebuy_touch  = close[1] > bot and low  <= bot + offset and close >= bot - offset
+        bool sell_touch   = close[1] < bot and high >= bot - offset and close <= bot + offset
+        bool resell_touch = close[1] < top and high >= top - offset and close <= top + offset
+
+        bool can_open = not array.get(_lock_arr, 0) or array.get(_zone_arr, 0) == name
+
+        // ── Trade Activation ─────────────────────────────────────────
+        // Pipeline: precondition → state set → lock acquired → THEN alert.
+        // Direction flip releases the global lock cleanly along with overlay.
+        if mode == "BUY"
+            if not b1_d and buy_touch and can_open
+                if ov_act and ov_dir == "SELL"
+                    ov_act := false
+                    array.set(_lock_arr, 0, false)
+                    array.set(_zone_arr, 0, "")
+                float tp2_calc = f_tp2_buy(top)
+                b1_d   := true
+                ov_act := true
+                ov_dir := "BUY"
+                e_bar  := bar_index
+                tp2_v  := tp2_calc
+                tp1_v  := top + (tp2_calc - top) / 2
+                sl_v   := bot - 3
+                array.set(_lock_arr, 0, true)
+                array.set(_zone_arr, 0, name)
+                if not buy_alert_sent
+                    alert("🟢 BUY " + f_num(top), alert.freq_all)
+                    buy_alert_sent := true
+                    buy_evt        := true
+            // REBUY — same-candle activation possible (sequential if, no else gate).
+            if b1_d and not b2_d and rebuy_touch
+                b2_d := true
+                if not rebuy_alert_sent
+                    alert("🟩 REBUY " + f_num(bot), alert.freq_all)
+                    rebuy_alert_sent := true
+                    rebuy_evt        := true
+
+        if mode == "SELL"
+            if not s1_d and sell_touch and can_open
+                if ov_act and ov_dir == "BUY"
+                    ov_act := false
+                    array.set(_lock_arr, 0, false)
+                    array.set(_zone_arr, 0, "")
+                float tp2_calc = f_tp2_sell(bot)
+                s1_d   := true
+                ov_act := true
+                ov_dir := "SELL"
+                e_bar  := bar_index
+                tp2_v  := tp2_calc
+                tp1_v  := bot - (bot - tp2_calc) / 2
+                sl_v   := top + 3
+                array.set(_lock_arr, 0, true)
+                array.set(_zone_arr, 0, name)
+                if not sell_alert_sent
+                    alert("🔴 SELL " + f_num(bot), alert.freq_all)
+                    sell_alert_sent := true
+                    sell_evt        := true
+            // RESELL — same-candle activation possible.
+            if s1_d and not s2_d and resell_touch
+                s2_d := true
+                if not resell_alert_sent
+                    alert("🟥 RESELL " + f_num(top), alert.freq_all)
+                    resell_alert_sent := true
+                    resell_evt        := true
+
+        // ── Overlay Removal — TP2 / SL hits only ─────────────────────
+        bool tp2_hit_buy  = ov_dir == "BUY"  and high >= tp2_v
+        bool sl_hit_buy   = ov_dir == "BUY"  and low  <= sl_v
+        bool tp2_hit_sell = ov_dir == "SELL" and low  <= tp2_v
+        bool sl_hit_sell  = ov_dir == "SELL" and high >= sl_v
+        if ov_act and (tp2_hit_buy or sl_hit_buy or tp2_hit_sell or sl_hit_sell)
+            ov_act := false
+            if array.get(_zone_arr, 0) == name
+                array.set(_lock_arr, 0, false)
+                array.set(_zone_arr, 0, "")
+
+        // ── Failsafe lock cleanup — prevents stale deadlocks ─────────
+        if not ov_act and array.get(_zone_arr, 0) == name and array.get(_lock_arr, 0)
+            array.set(_lock_arr, 0, false)
+            array.set(_zone_arr, 0, "")
+
+        // ── Stable Realtime Overlay Redraw ───────────────────────────
+        // While ov_act && show_trade are TRUE, every overlay object is re-anchored
+        // every chart bar against the live right_bar. The hide branch fires ONLY on
+        // active→inactive transitions (or show_trade toggled off mid-active). No
+        // flicker, no random disappear, no mid-bar shifting.
+        r_idx = right_bar
+
+        if ov_act and show_trade
+            float top_y   = top
+            float bot_y   = bot
+            float tp2_y   = tp2_v
+            float tp1_y   = tp1_v
+            float sl_y    = sl_v
+            bool  is_buy  = ov_dir == "BUY"
+
+            // Entry ribbon (amber)
+            float zone_h    = top - bot
+            float ribbon_h  = math.max(zone_h * 0.14, 0.10)
+            float glow_h    = math.max(zone_h * 0.32, 0.26)
+            float entry_y   = is_buy ? top_y : bot_y
+            float e_top     = entry_y + ribbon_h
+            float e_bot     = entry_y - ribbon_h
+            float eg_top    = entry_y + glow_h
+            float eg_bot    = entry_y - glow_h
+
+            // RR-layered TP zones
+            float tp1_box_top = is_buy ? tp1_y   : entry_y
+            float tp1_box_bot = is_buy ? entry_y : tp1_y
+            float tp2_box_top = is_buy ? tp2_y   : tp1_y
+            float tp2_box_bot = is_buy ? tp1_y   : tp2_y
+            float tp2_h       = math.abs(tp2_y - tp1_y)
+            float tp2_mid_h   = tp2_h * 0.60
+            float tp2_in_h    = tp2_h * 0.35
+            float tp2_mid_top = is_buy ? tp2_y : tp2_y + tp2_mid_h
+            float tp2_mid_bot = is_buy ? tp2_y - tp2_mid_h : tp2_y
+            float tp2_in_top  = is_buy ? tp2_y : tp2_y + tp2_in_h
+            float tp2_in_bot  = is_buy ? tp2_y - tp2_in_h : tp2_y
+            float sl_box_top  = is_buy ? entry_y : sl_y
+            float sl_box_bot  = is_buy ? sl_y    : entry_y
+
+            // Entry ribbon
+            box.set_lefttop(e_glow_bx,     e_bar, eg_top)
+            box.set_rightbottom(e_glow_bx, r_idx, eg_bot)
+            box.set_bgcolor(e_glow_bx, box_eglow)
+            box.set_lefttop(e_bx,     e_bar, e_top)
+            box.set_rightbottom(e_bx, r_idx, e_bot)
+            box.set_bgcolor(e_bx, box_entry)
+
+            // TP1 sub-zone
+            box.set_lefttop(tp1_bx,     e_bar, tp1_box_top)
+            box.set_rightbottom(tp1_bx, r_idx, tp1_box_bot)
+            box.set_bgcolor(tp1_bx, box_tp)
+
+            // TP2 hero — 3 layered fills (alpha compositing creates depth)
+            box.set_lefttop(tp2_out_bx,     e_bar, tp2_box_top)
+            box.set_rightbottom(tp2_out_bx, r_idx, tp2_box_bot)
+            box.set_bgcolor(tp2_out_bx, box_tp)
+            box.set_lefttop(tp2_mid_bx,     e_bar, tp2_mid_top)
+            box.set_rightbottom(tp2_mid_bx, r_idx, tp2_mid_bot)
+            box.set_bgcolor(tp2_mid_bx, box_tp)
+            box.set_lefttop(tp2_in_bx,     e_bar, tp2_in_top)
+            box.set_rightbottom(tp2_in_bx, r_idx, tp2_in_bot)
+            box.set_bgcolor(tp2_in_bx, box_tp)
+
+            // SL stop zone
+            box.set_lefttop(sl_bx,     e_bar, sl_box_top)
+            box.set_rightbottom(sl_bx, r_idx, sl_box_bot)
+            box.set_bgcolor(sl_bx, box_sl)
+
+            // Reference lines (palette-driven)
+            line.set_xy1(t1_ln, e_bar, tp1_y)
+            line.set_xy2(t1_ln, r_idx, tp1_y)
+            line.set_xy1(t2_ln, e_bar, tp2_y)
+            line.set_xy2(t2_ln, r_idx, tp2_y)
+            line.set_xy1(sl_ln, e_bar, sl_y)
+            line.set_xy2(sl_ln, r_idx, sl_y)
+            line.set_xy1(e_ln,  e_bar, entry_y)
+            line.set_xy2(e_ln,  r_idx, entry_y)
+
+            // Floating UI tags
+            string side = is_buy ? "🟢 BUY" : "🔴 SELL"
+            label.set_xy(lbl_e,  r_idx, entry_y)
+            label.set_text(lbl_e, side + " " + f_num(is_buy ? top : bot))
+            label.set_xy(lbl_t1, r_idx, tp1_y)
+            label.set_text(lbl_t1, "TP1 " + f_num(tp1_v))
+            label.set_xy(lbl_t2, r_idx, tp2_y)
+            label.set_text(lbl_t2, "⚑ TP2 " + f_num(tp2_v))
+            label.set_xy(lbl_sl, r_idx, sl_y)
+            label.set_text(lbl_sl, "SL " + f_num(sl_v))
+
+            // Entry-point marker pinned at the trigger bar
+            label.set_xy(lbl_mark, e_bar, entry_y)
+            label.set_text(lbl_mark, is_buy ? "▼" : "▲")
+            label.set_style(lbl_mark, is_buy ? label.style_label_down : label.style_label_up)
+        else
+            // Hide branch — fires ONLY on transitions or when show_trade is off.
+            if (ov_act[1] and not ov_act) or (show_trade[1] and not show_trade) or (ov_act and not show_trade)
+                int   hide_x = bar_index
+                float hide_y = 0.0
+                box.set_lefttop(tp1_bx,         hide_x, hide_y)
+                box.set_rightbottom(tp1_bx,     hide_x, hide_y)
+                box.set_lefttop(tp2_out_bx,     hide_x, hide_y)
+                box.set_rightbottom(tp2_out_bx, hide_x, hide_y)
+                box.set_lefttop(tp2_mid_bx,     hide_x, hide_y)
+                box.set_rightbottom(tp2_mid_bx, hide_x, hide_y)
+                box.set_lefttop(tp2_in_bx,      hide_x, hide_y)
+                box.set_rightbottom(tp2_in_bx,  hide_x, hide_y)
+                box.set_lefttop(sl_bx,          hide_x, hide_y)
+                box.set_rightbottom(sl_bx,      hide_x, hide_y)
+                box.set_lefttop(e_glow_bx,      hide_x, hide_y)
+                box.set_rightbottom(e_glow_bx,  hide_x, hide_y)
+                box.set_lefttop(e_bx,           hide_x, hide_y)
+                box.set_rightbottom(e_bx,       hide_x, hide_y)
+                line.set_xy1(t1_ln, hide_x, hide_y)
+                line.set_xy2(t1_ln, hide_x, hide_y)
+                line.set_xy1(t2_ln, hide_x, hide_y)
+                line.set_xy2(t2_ln, hide_x, hide_y)
+                line.set_xy1(sl_ln, hide_x, hide_y)
+                line.set_xy2(sl_ln, hide_x, hide_y)
+                line.set_xy1(e_ln,  hide_x, hide_y)
+                line.set_xy2(e_ln,  hide_x, hide_y)
+                label.set_xy(lbl_e,  hide_x, hide_y)
+                label.set_text(lbl_e,  "")
+                label.set_xy(lbl_t1, hide_x, hide_y)
+                label.set_text(lbl_t1, "")
+                label.set_xy(lbl_t2, hide_x, hide_y)
+                label.set_text(lbl_t2, "")
+                label.set_xy(lbl_sl, hide_x, hide_y)
+                label.set_text(lbl_sl, "")
+                label.set_xy(lbl_mark, hide_x, hide_y)
+                label.set_text(lbl_mark, "")
+
+        // ── Zone box & label ─────────────────────────────────────────
+        zone_color = mode == "BUY" ? buy_c : (mode == "SELL" ? sell_c : ZONE_NEUT)
+        int bx_left = math.max(0, bar_index - 4999)
+        var box   bx = box.new(0, top, right_bar, bot, border_width = 0, border_color = color.new(color.white, 100))
+        var label lt = label.new(right_bar, top, "", style = label.style_label_center, size = size.small)
+        box.set_lefttop(bx, bx_left, top)
+        box.set_rightbottom(bx, right_bar, bot)
+        box.set_bgcolor(bx, zone_color)
+        box.set_border_color(bx, color.new(color.white, 100))
+        label.set_xy(lt, right_bar + label_off, (top + bot) / 2)
+        label.set_text(lt, f_num(bot) + "-" + f_num(top))
+        label.set_color(lt, color.new(zone_color, 0))
+
+    [buy_break_evt, sell_break_evt, buy_evt, sell_evt, rebuy_evt, resell_evt, h1_buy_break_evt, h1_sell_break_evt, h4_buy_break_evt, h4_sell_break_evt, ov_act]
+
+//==================================================
+// 🚀 Dispatch ten zones
+//==================================================
+[bb1,  sb1,  bu1,  se1,  rb1,  rs1,  hb1,  hs1,  fb1,  fs1,  oa1]  = f_zone(z1,  v1_t,  v1_b,  "1")
+[bb2,  sb2,  bu2,  se2,  rb2,  rs2,  hb2,  hs2,  fb2,  fs2,  oa2]  = f_zone(z2,  v2_t,  v2_b,  "2")
+[bb3,  sb3,  bu3,  se3,  rb3,  rs3,  hb3,  hs3,  fb3,  fs3,  oa3]  = f_zone(z3,  v3_t,  v3_b,  "3")
+[bb4,  sb4,  bu4,  se4,  rb4,  rs4,  hb4,  hs4,  fb4,  fs4,  oa4]  = f_zone(z4,  v4_t,  v4_b,  "4")
+[bb5,  sb5,  bu5,  se5,  rb5,  rs5,  hb5,  hs5,  fb5,  fs5,  oa5]  = f_zone(z5,  v5_t,  v5_b,  "5")
+[bb6,  sb6,  bu6,  se6,  rb6,  rs6,  hb6,  hs6,  fb6,  fs6,  oa6]  = f_zone(z6,  v6_t,  v6_b,  "6")
+[bb7,  sb7,  bu7,  se7,  rb7,  rs7,  hb7,  hs7,  fb7,  fs7,  oa7]  = f_zone(z7,  v7_t,  v7_b,  "7")
+[bb8,  sb8,  bu8,  se8,  rb8,  rs8,  hb8,  hs8,  fb8,  fs8,  oa8]  = f_zone(z8,  v8_t,  v8_b,  "8")
+[bb9,  sb9,  bu9,  se9,  rb9,  rs9,  hb9,  hs9,  fb9,  fs9,  oa9]  = f_zone(z9,  v9_t,  v9_b,  "9")
+[bb10, sb10, bu10, se10, rb10, rs10, hb10, hs10, fb10, fs10, oa10] = f_zone(z10, v10_t, v10_b, "10")
+
+// Aggregate overlay-alive flag across all 10 zones.
+any_overlay_alive := oa1 or oa2 or oa3 or oa4 or oa5 or oa6 or oa7 or oa8 or oa9 or oa10
+
+// === Deadlock protection — force-release stale global lock ===
+if barstate.isconfirmed
+    if array.get(_lock_arr, 0) and not any_overlay_alive
+        lock_idle_bars += 1
+        if lock_idle_bars >= 2
+            array.set(_lock_arr, 0, false)
+            array.set(_zone_arr, 0, "")
+            lock_idle_bars := 0
+    else
+        lock_idle_bars := 0
+
+//==================================================
+// 🔔 Multi-break aggregation — single alert per cycle, no spam
+//==================================================
+// Counts how many zones triggered a NEW break this M15 close.
+//   new_buy_breaks  > 1  →  🟢⏫ M15 MULTI BREAK [lowest_bot ⟶ highest_top]
+//   new_buy_breaks == 1  →  🟢⬆️ M15 BREAK       [bot ⟶ top]
+//   new_sell_breaks > 1  →  🔴⏬ M15 MULTI BREAK [highest_top ⟶ lowest_bot]
+//   new_sell_breaks == 1 →  🔴⬇️ M15 BREAK       [top ⟶ bot]
+// Individual per-zone break alerts are NOT emitted from f_zone — only one global
+// message fires per cycle, killing spam from simultaneous zone breaks.
+int new_buy_breaks  = (bb1 ? 1 : 0) + (bb2 ? 1 : 0) + (bb3 ? 1 : 0) + (bb4 ? 1 : 0) + (bb5 ? 1 : 0) + (bb6 ? 1 : 0) + (bb7 ? 1 : 0) + (bb8 ? 1 : 0) + (bb9 ? 1 : 0) + (bb10 ? 1 : 0)
+int new_sell_breaks = (sb1 ? 1 : 0) + (sb2 ? 1 : 0) + (sb3 ? 1 : 0) + (sb4 ? 1 : 0) + (sb5 ? 1 : 0) + (sb6 ? 1 : 0) + (sb7 ? 1 : 0) + (sb8 ? 1 : 0) + (sb9 ? 1 : 0) + (sb10 ? 1 : 0)
+
+float buy_break_lo  = na
+float buy_break_hi  = na
+float sell_break_lo = na
+float sell_break_hi = na
+
+if bb1
+    buy_break_lo := na(buy_break_lo) ? v1_b : math.min(buy_break_lo, v1_b)
+    buy_break_hi := na(buy_break_hi) ? v1_t : math.max(buy_break_hi, v1_t)
+if bb2
+    buy_break_lo := na(buy_break_lo) ? v2_b : math.min(buy_break_lo, v2_b)
+    buy_break_hi := na(buy_break_hi) ? v2_t : math.max(buy_break_hi, v2_t)
+if bb3
+    buy_break_lo := na(buy_break_lo) ? v3_b : math.min(buy_break_lo, v3_b)
+    buy_break_hi := na(buy_break_hi) ? v3_t : math.max(buy_break_hi, v3_t)
+if bb4
+    buy_break_lo := na(buy_break_lo) ? v4_b : math.min(buy_break_lo, v4_b)
+    buy_break_hi := na(buy_break_hi) ? v4_t : math.max(buy_break_hi, v4_t)
+if bb5
+    buy_break_lo := na(buy_break_lo) ? v5_b : math.min(buy_break_lo, v5_b)
+    buy_break_hi := na(buy_break_hi) ? v5_t : math.max(buy_break_hi, v5_t)
+if bb6
+    buy_break_lo := na(buy_break_lo) ? v6_b : math.min(buy_break_lo, v6_b)
+    buy_break_hi := na(buy_break_hi) ? v6_t : math.max(buy_break_hi, v6_t)
+if bb7
+    buy_break_lo := na(buy_break_lo) ? v7_b : math.min(buy_break_lo, v7_b)
+    buy_break_hi := na(buy_break_hi) ? v7_t : math.max(buy_break_hi, v7_t)
+if bb8
+    buy_break_lo := na(buy_break_lo) ? v8_b : math.min(buy_break_lo, v8_b)
+    buy_break_hi := na(buy_break_hi) ? v8_t : math.max(buy_break_hi, v8_t)
+if bb9
+    buy_break_lo := na(buy_break_lo) ? v9_b : math.min(buy_break_lo, v9_b)
+    buy_break_hi := na(buy_break_hi) ? v9_t : math.max(buy_break_hi, v9_t)
+if bb10
+    buy_break_lo := na(buy_break_lo) ? v10_b : math.min(buy_break_lo, v10_b)
+    buy_break_hi := na(buy_break_hi) ? v10_t : math.max(buy_break_hi, v10_t)
+
+if sb1
+    sell_break_hi := na(sell_break_hi) ? v1_t : math.max(sell_break_hi, v1_t)
+    sell_break_lo := na(sell_break_lo) ? v1_b : math.min(sell_break_lo, v1_b)
+if sb2
+    sell_break_hi := na(sell_break_hi) ? v2_t : math.max(sell_break_hi, v2_t)
+    sell_break_lo := na(sell_break_lo) ? v2_b : math.min(sell_break_lo, v2_b)
+if sb3
+    sell_break_hi := na(sell_break_hi) ? v3_t : math.max(sell_break_hi, v3_t)
+    sell_break_lo := na(sell_break_lo) ? v3_b : math.min(sell_break_lo, v3_b)
+if sb4
+    sell_break_hi := na(sell_break_hi) ? v4_t : math.max(sell_break_hi, v4_t)
+    sell_break_lo := na(sell_break_lo) ? v4_b : math.min(sell_break_lo, v4_b)
+if sb5
+    sell_break_hi := na(sell_break_hi) ? v5_t : math.max(sell_break_hi, v5_t)
+    sell_break_lo := na(sell_break_lo) ? v5_b : math.min(sell_break_lo, v5_b)
+if sb6
+    sell_break_hi := na(sell_break_hi) ? v6_t : math.max(sell_break_hi, v6_t)
+    sell_break_lo := na(sell_break_lo) ? v6_b : math.min(sell_break_lo, v6_b)
+if sb7
+    sell_break_hi := na(sell_break_hi) ? v7_t : math.max(sell_break_hi, v7_t)
+    sell_break_lo := na(sell_break_lo) ? v7_b : math.min(sell_break_lo, v7_b)
+if sb8
+    sell_break_hi := na(sell_break_hi) ? v8_t : math.max(sell_break_hi, v8_t)
+    sell_break_lo := na(sell_break_lo) ? v8_b : math.min(sell_break_lo, v8_b)
+if sb9
+    sell_break_hi := na(sell_break_hi) ? v9_t : math.max(sell_break_hi, v9_t)
+    sell_break_lo := na(sell_break_lo) ? v9_b : math.min(sell_break_lo, v9_b)
+if sb10
+    sell_break_hi := na(sell_break_hi) ? v10_t : math.max(sell_break_hi, v10_t)
+    sell_break_lo := na(sell_break_lo) ? v10_b : math.min(sell_break_lo, v10_b)
+
+// Single-message dispatcher: MULTI when >1, single when ==1.
+if new_buy_breaks > 1
+    alert("🟢⏫ M15 MULTI BREAK [" + f_num(buy_break_lo) + " ⟶ " + f_num(buy_break_hi) + "]", alert.freq_all)
+else if new_buy_breaks == 1
+    alert("🟢⬆️ M15 BREAK [" + f_num(buy_break_lo) + " ⟶ " + f_num(buy_break_hi) + "]", alert.freq_all)
+
+if new_sell_breaks > 1
+    alert("🔴⏬ M15 MULTI BREAK [" + f_num(sell_break_hi) + " ⟶ " + f_num(sell_break_lo) + "]", alert.freq_all)
+else if new_sell_breaks == 1
+    alert("🔴⬇️ M15 BREAK [" + f_num(sell_break_hi) + " ⟶ " + f_num(sell_break_lo) + "]", alert.freq_all)
+
+// H1/H4 confirmation alerts (single-shot per cycle, reformatted).
+bool h1_buy_break_global  = hb1 or hb2 or hb3 or hb4 or hb5 or hb6 or hb7 or hb8 or hb9 or hb10
+bool h1_sell_break_global = hs1 or hs2 or hs3 or hs4 or hs5 or hs6 or hs7 or hs8 or hs9 or hs10
+bool h4_buy_break_global  = fb1 or fb2 or fb3 or fb4 or fb5 or fb6 or fb7 or fb8 or fb9 or fb10
+bool h4_sell_break_global = fs1 or fs2 or fs3 or fs4 or fs5 or fs6 or fs7 or fs8 or fs9 or fs10
+
+if h1_buy_break_global
+    alert("🟢⬆️ H1 BREAK", alert.freq_all)
+if h1_sell_break_global
+    alert("🔴⬇️ H1 BREAK", alert.freq_all)
+if h4_buy_break_global
+    alert("🟢⬆️ H4 BREAK", alert.freq_all)
+if h4_sell_break_global
+    alert("🔴⬇️ H4 BREAK", alert.freq_all)
+
+//==================================================
+// 🔔 alertcondition() hooks — TradingView "Add alert" UI
+//==================================================
+bool buy_break_trigger        = new_buy_breaks  > 0
+bool sell_break_trigger       = new_sell_breaks > 0
+bool multi_buy_break_trigger  = new_buy_breaks  > 1
+bool multi_sell_break_trigger = new_sell_breaks > 1
+
+bool buy_trigger     = bu1 or bu2 or bu3 or bu4 or bu5 or bu6 or bu7 or bu8 or bu9 or bu10
+bool sell_trigger    = se1 or se2 or se3 or se4 or se5 or se6 or se7 or se8 or se9 or se10
+bool rebuy_trigger   = rb1 or rb2 or rb3 or rb4 or rb5 or rb6 or rb7 or rb8 or rb9 or rb10
+bool resell_trigger  = rs1 or rs2 or rs3 or rs4 or rs5 or rs6 or rs7 or rs8 or rs9 or rs10
+
+alertcondition(buy_break_trigger,        title = "M15 BUY BREAK",        message = "🟢⬆️ M15 BREAK")
+alertcondition(sell_break_trigger,       title = "M15 SELL BREAK",       message = "🔴⬇️ M15 BREAK")
+alertcondition(multi_buy_break_trigger,  title = "M15 MULTI BUY BREAK",  message = "🟢⏫ M15 MULTI BREAK")
+alertcondition(multi_sell_break_trigger, title = "M15 MULTI SELL BREAK", message = "🔴⏬ M15 MULTI BREAK")
+alertcondition(buy_trigger,              title = "BUY",                  message = "🟢 BUY")
+alertcondition(sell_trigger,             title = "SELL",                 message = "🔴 SELL")
+alertcondition(rebuy_trigger,            title = "REBUY",                message = "🟩 REBUY")
+alertcondition(resell_trigger,           title = "RESELL",               message = "🟥 RESELL")
+alertcondition(h1_buy_break_global,      title = "H1 BUY BREAK",         message = "🟢⬆️ H1 BREAK")
+alertcondition(h1_sell_break_global,     title = "H1 SELL BREAK",        message = "🔴⬇️ H1 BREAK")
+alertcondition(h4_buy_break_global,      title = "H4 BUY BREAK",         message = "🟢⬆️ H4 BREAK")
+alertcondition(h4_sell_break_global,     title = "H4 SELL BREAK",        message = "🔴⬇️ H4 BREAK")
+alertcondition(true, title = "Any alert() function call", message = "Gold Sniper alert")
