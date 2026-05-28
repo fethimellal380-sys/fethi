@@ -420,14 +420,14 @@ if m15_event
     // ===== ⬆️ BUY BREAKS
     if new_buy_breaks == 1
         alert(
-         "⚡⬆️ كسر M15 ○ [" +
+         "🟢⬆️ M15 BREAK [" +
          f_num(first_buy_bot) + " ⟶ " +
          f_num(last_buy_top) + "]",
          alert.freq_once_per_bar_close)
 
     else if new_buy_breaks > 1
         alert(
-         "⚡⏫ كسر متتالي M15 ○ [" +
+         "🟢⏫ M15 MULTI BREAK [" +
          f_num(first_buy_bot) + " ⟶ " +
          f_num(last_buy_top) + "]",
          alert.freq_once_per_bar_close)
@@ -435,14 +435,14 @@ if m15_event
     // ===== ⬇️ SELL BREAKS
     if new_sell_breaks == 1
         alert(
-         "⚡⬇️ كسر M15 ● [" +
+         "🔴⬇️ M15 BREAK [" +
          f_num(last_sell_bot) + " ⟶ " +
          f_num(first_sell_top) + "]",
          alert.freq_once_per_bar_close)
 
     else if new_sell_breaks > 1
         alert(
-         "⚡⏬ كسر متتالي M15 ● [" +
+         "🔴⏬ M15 MULTI BREAK [" +
          f_num(last_sell_bot) + " ⟶ " +
          f_num(first_sell_top) + "]",
          alert.freq_once_per_bar_close)
