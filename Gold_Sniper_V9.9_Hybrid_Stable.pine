@@ -305,21 +305,25 @@ f_zone(enable, top, bot, name) =>
 
     bool cooldown_ok = (m15_bar_counter - last_flip_m15) > 1
 
-    // Mode flip on M15 close — alerts emitted at GLOBAL aggregation layer
-    // (multi-break aware, single message per cycle).
-    if m15_just_closed
+    // FIX 1+3+4: barstate.isconfirmed gate prevents intrabar realtime detection.
+    // M15/H1/H4 break alerts now fire only on the closing tick of the chart bar.
+    if m15_just_closed and barstate.isconfirmed
         if final_buy_break and mode != "BUY" and not buy_break_sent and cooldown_ok
             mode := "BUY"
             last_flip_m15  := m15_bar_counter
             buy_break_sent := true
             buy_break_evt  := true
+            // FIX 8: per-zone visible BREAK alert with entry price.
+            alert("🟢 BREAK BUY " + f_num(top), alert.freq_once_per_bar_close)
         else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
             mode := "SELL"
             last_flip_m15   := m15_bar_counter
             sell_break_sent := true
             sell_break_evt  := true
+            // FIX 8: per-zone visible BREAK alert with entry price.
+            alert("🔴 BREAK SELL " + f_num(bot), alert.freq_once_per_bar_close)
 
-    if use_h1_break and h1_just_closed and not h1_break_sent
+    if use_h1_break and h1_just_closed and barstate.isconfirmed and not h1_break_sent
         if h1_buy_break_ok
             h1_break_sent     := true
             h1_buy_break_evt  := true
@@ -327,7 +331,7 @@ f_zone(enable, top, bot, name) =>
             h1_break_sent     := true
             h1_sell_break_evt := true
 
-    if use_h4_break and h4_just_closed and not h4_break_sent
+    if use_h4_break and h4_just_closed and barstate.isconfirmed and not h4_break_sent
         if h4_buy_break_ok
             h4_break_sent     := true
             h4_buy_break_evt  := true
@@ -344,14 +348,16 @@ f_zone(enable, top, bot, name) =>
         bool can_unlock     = (bar_index - e_bar) >= min_live_bars
         bool buy_unlock_ok  = f_unlock_sell(top, open, close)
         bool sell_unlock_ok = f_unlock_buy(bot,  open, close)
-        if can_unlock and (b1_d or b2_d) and buy_unlock_ok
+        // FIX 5+6: barstate.isconfirmed gate prevents realtime intrabar unlock,
+        // which was causing overlays to disappear/reappear during live ticks.
+        if barstate.isconfirmed and can_unlock and (b1_d or b2_d) and buy_unlock_ok
             b1_d   := false
             b2_d   := false
             if ov_act and array.get(_zone_arr, 0) == name
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
-        if can_unlock and (s1_d or s2_d) and sell_unlock_ok
+        if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
             s1_d   := false
             s2_d   := false
             if ov_act and array.get(_zone_arr, 0) == name
@@ -456,9 +462,13 @@ f_zone(enable, top, bot, name) =>
         // every chart bar against the live right_bar. The hide branch fires ONLY on
         // active→inactive transitions (or show_trade toggled off mid-active). No
         // flicker, no random disappear, no mid-bar shifting.
+        // FIX 7: stable overlay draw — survives transient ov_act flips during
+        // realtime ticks. Uses the b1/b2/s1/s2_d state machine (which is reset
+        // only on real unlock or first activation) as a safety disjunction so
+        // the overlay does not disappear due to mid-bar ov_act flicker.
         r_idx = right_bar
 
-        if ov_act and show_trade
+        if show_trade and (ov_act or b1_d or b2_d or s1_d or s2_d)
             float top_y   = top
             float bot_y   = bot
             float tp2_y   = tp2_v

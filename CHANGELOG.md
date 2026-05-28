@@ -291,3 +291,50 @@ if h4_just_closed
 - ✅ `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` — صفر تغيير
 - ✅ Unlock logic, mode engine, TP engine, rendering, object pools — صفر تغيير
 - ✅ M15 break latches (`buy_break_sent`, `sell_break_sent`) — صفر تغيير (التوجيه خصّ H1/H4 فقط)
+
+
+### V9.9 Hybrid Stable — Confirmed-Bar Hardening Pass
+
+ثمانية إصلاحات جراحية تستهدف ثبات الـ realtime: تأخير اتخاذ القرارات (break / unlock) إلى لحظة `barstate.isconfirmed` (إغلاق الـ chart bar فعلياً)، وإضافة تنبيهات مرئية للكسر، وتثبيت الـ overlay ضد flickers الـ ticks. **لا تغيير في الاستراتيجية أو شروط الدخول أو منطق TP/SL.**
+
+#### ملاحظة قبل التطبيق
+تم rollback لتعديل غير مُلتَزَم من الجولة السابقة (`buy_flip`/`sell_flip` restructure مع direct alerts) لأن هذا الـ Patch Order يفترض البنية الأصلية (وجود `buy_break_evt := true` وجملة `if final_buy_break and ... not buy_break_sent and cooldown_ok`).
+
+#### تفاصيل الإصلاحات
+
+**FIX 1 — M15 BREAK confirmation**
+- `if m15_just_closed` → `if m15_just_closed and barstate.isconfirmed`
+- اكتشاف الكسر يحدث فقط على tick إغلاق الـ chart bar، لا على ticks intrabar.
+
+**FIX 2 — SELL BREAK confirmation**
+- لا تغيير فعلي (الجزء الـ `else if` الداخلي يرث الحارس من FIX 1's parent guard). بقي شرطه كما هو في الـ spec.
+
+**FIX 3 — H1 spam fix**
+- `if use_h1_break and h1_just_closed and not h1_break_sent` → `... and barstate.isconfirmed and not h1_break_sent`
+- يمنع التحقّق المتكرر داخل الـ chart bar حيث H1 just closed.
+
+**FIX 4 — H4 spam fix**
+- نفس FIX 3 لكن لـ H4.
+
+**FIX 5 — BUY unlock realtime fix**
+- `if can_unlock ...` → `if barstate.isconfirmed and can_unlock ...`
+- يمنع تنفيذ الـ unlock أثناء ticks مفتوحة، فلا تختفي الـ overlays فجأة في realtime ثم تعود.
+
+**FIX 6 — SELL unlock realtime fix**
+- نفس FIX 5 لـ sell unlock.
+
+**FIX 7 — Stable overlay draw**
+- `if ov_act and show_trade` → `if show_trade and (ov_act or b1_d or b2_d or s1_d or s2_d)`
+- الـ overlay يبقى مرئياً طالما **أيٌّ** من state flags مفعّل، فلا يختفي بسبب flips مؤقتة لـ `ov_act` في realtime.
+- ⚠️ أثر جانبي: الـ overlay قد يظل مرئياً بعد ضربة TP2/SL حتى يحدث unlock فعلي (لأن `b1_d`/`s1_d` لا تُمسح إلا عند unlock، بينما `ov_act` يُمسح عند TP2/SL).
+
+**FIX 8 — Break alert visibility (per-zone)**
+- إضافة `alert("🟢 BREAK BUY " + f_num(top), alert.freq_once_per_bar_close)` بعد `buy_break_evt := true`.
+- إضافة `alert("🔴 BREAK SELL " + f_num(bot), alert.freq_once_per_bar_close)` بعد `sell_break_evt := true`.
+- ⚠️ الـ global aggregator alerts (`🟢⬆️ M15 BREAK [bot ⟶ top]`، `🟢⏫ M15 MULTI BREAK [...]`) **تبقى تعمل** لأن `*_break_evt := true` ما زال يُعيَّن. النتيجة: للكسر الواحد قد يصدر تنبيهان (per-zone + global). إذا أردت إلغاء أحدهما، أخبرني.
+
+#### المنطق المُجمَّد (لم يتغير)
+- `final_buy_break` / `final_sell_break` — صفر تغيير (السطور 297-298).
+- `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` — صفر تغيير (السطور 382-385).
+- شروط BUY/SELL/REBUY/RESELL activation — صفر تغيير.
+- TP/SL math، التعزيز، الرسم المؤسسي، object pools، architecture، palette — صفر تغيير.
