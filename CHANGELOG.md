@@ -518,3 +518,71 @@ if show_trade and overlay_visible
 - ✅ Touch logic (4 touches) — السطور 390-393
 - ✅ Activation/unlock/mode/TP/SL — صفر تغيير
 - ✅ Object pool، architecture، palette — صفر تغيير
+
+
+### V9.9 Hybrid Stable — Entry Alerts Delivery Fix
+
+تعديل 4 أسطر فقط لمعالجة شكوى المستخدم: لمس BUY/REBUY بدون وصول تنبيه.
+
+#### المشكلة المُبلَّغة
+> "هنا مفروض ايضا لمس منطقة صفقة شراء واذا تعمق بشمعة [إشارات] تعزيز لكن لم ياتي تنبيه"
+
+تنبيهات الدخول (BUY/SELL/REBUY/RESELL) لم تكن تصل عند تحقُّق شروط اللمس.
+
+#### السبب الجذري — تعارض بين latch + `freq_once_per_bar_close`
+
+```pine
+if not b1_d and buy_touch and can_open
+    ...
+    b1_d := true                          // ← يتفعَّل على tick 1
+    if not buy_alert_sent
+        alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar_close)
+        buy_alert_sent := true            // ← latch يُغلق
+```
+
+تتابع الأحداث على bar الدخول:
+1. **Tick 1** (لمس الزون): `b1_d=false` → الشرط ينطبق → `b1_d := true` → `alert()` يُستدعى → `latch=true`
+2. **Tick 2..N** (داخل نفس الـ bar): `b1_d=true` → الشرط الخارجي يفشل → `alert()` **لا يُستدعى** مرة أخرى
+3. **Closing tick**: نفس Tick 2..N — `alert()` لا يُستدعى
+
+**`alert.freq_once_per_bar_close` يتطلَّب أن يُستدعى `alert()` على closing tick** ليُسلَّم. بما أنه استُدعي فقط على tick 1 (وليس على closing tick) → التنبيه **لا يُسلَّم أبداً**.
+
+هذا التعارض دخل في commit `55dce89` (Unify entry alerts SAFE FIX #1). كان نية المستخدم آنذاك close-confirmation لكن البنية الحالية للـ activation gate (`if not b1_d`) تمنع إعادة استدعاء `alert()` بعد `b1_d := true`.
+
+#### الإصلاح
+
+عودة الـ 4 entry alerts إلى `alert.freq_once_per_bar` (يُسلِّم من **أول استدعاء** داخل الـ bar، بدون اشتراط closing tick):
+
+```diff
+- alert("🟢 BUY "    + f_num(top), alert.freq_once_per_bar_close)
++ alert("🟢 BUY "    + f_num(top), alert.freq_once_per_bar)
+
+- alert("🟩 REBUY "  + f_num(bot), alert.freq_once_per_bar_close)
++ alert("🟩 REBUY "  + f_num(bot), alert.freq_once_per_bar)
+
+- alert("🔴 SELL "   + f_num(bot), alert.freq_once_per_bar_close)
++ alert("🔴 SELL "   + f_num(bot), alert.freq_once_per_bar)
+
+- alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar_close)
++ alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar)
+```
+
+#### بعد الإصلاح
+
+| الحدث | Frequency | السلوك |
+|---|---|---|
+| BUY entry (لمس top) | `freq_once_per_bar` | يُسلَّم فور تحقُّق اللمس داخل الـ bar |
+| REBUY (لمس bot) | `freq_once_per_bar` | يُسلَّم فور تحقُّق اللمس |
+| SELL entry (لمس bot) | `freq_once_per_bar` | يُسلَّم فور تحقُّق اللمس |
+| RESELL (لمس top) | `freq_once_per_bar` | يُسلَّم فور تحقُّق اللمس |
+| M15 BREAK (single + multi) | `freq_once_per_bar_close` | بقي على إغلاق الـ bar (لا تأثير من الـ activation gate) |
+| H1/H4 BREAK | `freq_once_per_bar_close` | بقي كما هو |
+
+#### Trade-off
+الـ entry alerts تفقد close-confirmation (تُطلَق فور تحقُّق شرط اللمس داخل الـ bar). إذا انعكست الشمعة لاحقاً، قد يكون هناك repaint بصري. لكن الـ activation logic نفسه يستخدم `b1_d/b2_d/s1_d/s2_d` state machine المحمية، فلا repaint في القرارات الفعلية للاستراتيجية.
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ Break detection (`final_buy_break` / `final_sell_break`) — السطور 301-302
+- ✅ Touch geometry (4 conditions) — السطور 390-393
+- ✅ Activation/unlock/mode/TP/SL/object pools — صفر تغيير
+- ✅ Break alerts (M15/H1/H4) بقيت `freq_once_per_bar_close` (لا تُمَس)

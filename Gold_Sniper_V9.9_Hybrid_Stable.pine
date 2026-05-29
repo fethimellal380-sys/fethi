@@ -412,14 +412,14 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not buy_alert_sent
-                    alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar_close)
+                    alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar)
                     buy_alert_sent := true
                     buy_evt        := true
             // REBUY — same-candle activation possible (sequential if, no else gate).
             if b1_d and not b2_d and rebuy_touch
                 b2_d := true
                 if not rebuy_alert_sent
-                    alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar_close)
+                    alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar)
                     rebuy_alert_sent := true
                     rebuy_evt        := true
 
@@ -438,14 +438,14 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, true)
                 array.set(_zone_arr, 0, name)
                 if not sell_alert_sent
-                    alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar_close)
+                    alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
                     sell_alert_sent := true
                     sell_evt        := true
             // RESELL — same-candle activation possible.
             if s1_d and not s2_d and resell_touch
                 s2_d := true
                 if not resell_alert_sent
-                    alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar_close)
+                    alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar)
                     resell_alert_sent := true
                     resell_evt        := true
 
