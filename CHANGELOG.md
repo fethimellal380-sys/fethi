@@ -425,3 +425,42 @@ if show_trade and overlay_visible
 - ✅ Mode flow، unlock engine، TP/SL math، التعزيز، الاتجاه
 - ✅ Object pools، rendering pipeline، architecture، palette
 - ✅ Break conditions، entry/exit gates
+
+
+### V9.9 Hybrid Stable — Visual Cleanup + Reinforcement Label
+
+أربعة تعديلات بصرية على الـ overlay rendering. لا تغيير في الاستراتيجية، break logic، touch logic، entry/exit، TP/SL، أو unlock.
+
+#### 1) إزالة اللون الأصفر كلياً
+- `entry_col`: `(#FACC15, 10)` → `(#FACC15, 100)` (شفاف تماماً → الـ entry line مخفي)
+- `box_entry`: `(#FACC15, 70)` → `(#FACC15, 100)` (الـ entry ribbon مخفي)
+- `box_eglow`: `(#FACC15, 85)` → `(#FACC15, 100)` (الـ entry glow مخفي)
+
+#### 2) إزالة السهم الأصفر ▲/▼ كلياً
+- `LBL_MARK_C`: `(#FACC15, 15)` → `(#FACC15, 100)` (background شفاف)
+- `label.set_text(lbl_mark, ...)` على السهم → `""` فارغ دائماً
+- حُذف `label.set_style(lbl_mark, ...)` (لا حاجة له مع نص فارغ)
+
+#### 3) تخفيف الأزرق + إلغاء التدرّج (gradient flat)
+- `tp_col`: `(#3B82F6, 84)` → `(#3B82F6, 90)` — أزرق أفتح
+- أُضيف ثابت `box_hidden = color.new(color.gray, 100)` للـ inner layers
+- `tp2_mid_bx` bgcolor → `box_hidden` (الطبقة الوسطى مخفية)
+- `tp2_in_bx` bgcolor → `box_hidden` (الطبقة الداخلية مخفية)
+- النتيجة: TP2 box واحد فقط (`tp2_out_bx`) بلون موحَّد، بدون تدرّج layered
+
+#### 4) إضافة رقم تعزيز (Reinforcement Label) على الرسم
+- متغيّر جديد: `var label lbl_r` في الـ object pool لكل zone
+- ثابت لون جديد: `LBL_R_C = color.new(#0F1116, 8)` — خلفية داكنة pill
+- في redraw block:
+  - عند `b2_d=true` (REBUY مفعَّل): يظهر `🟩 REBUY <bot_price>` على مستوى bot
+  - عند `s2_d=true` (RESELL مفعَّل): يظهر `🟥 RESELL <top_price>` على مستوى top
+  - وإلا: نص فارغ (مخفي)
+- في hide branch: `lbl_r` يُخفى مع باقي الـ labels عند التحوُّل
+- النتيجة: المستخدم يرى رقم/سعر التعزيز على الشارت لحظة تفعيله
+
+#### المنطق المُجمَّد (تأكيد نهائي — صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 297-298)
+- ✅ touch geometry (buy/sell/rebuy/resell) — السطور 382-385
+- ✅ شروط BUY/SELL/REBUY/RESELL activation
+- ✅ TP/SL math، التعزيز، الاتجاه، break logic، unlock engine
+- ✅ Object pools structure، architecture، naming

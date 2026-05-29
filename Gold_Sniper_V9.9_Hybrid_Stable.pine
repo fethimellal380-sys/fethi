@@ -34,28 +34,31 @@ grp_htf      = "Higher Timeframe Breaks"
 use_h1_break = input.bool(false, "تفعيل كسر H1", group = grp_htf)
 use_h4_break = input.bool(false, "تفعيل كسر H4", group = grp_htf)
 
-// === Institutional gold palette (transparency >= 70 on box surfaces) ==============
-// Lines may be more opaque (thin elements). Boxes stay light to keep gold readable.
-var color tp_col      = color.new(#3B82F6, 84)
+// === Institutional gold palette — flat blue/red areas, no yellow ==================
+// Yellow elements (entry ribbon/glow/line + ▲▼ marker) made fully transparent.
+// Blue lightened (84 → 90) and TP gradient inner layers will be hidden in redraw.
+var color tp_col      = color.new(#3B82F6, 90)
 var color tp_border   = color.new(#2563EB, 25)
 var color sl_col      = color.new(#EF4444, 88)
 var color sl_border   = color.new(#DC2626, 20)
-var color entry_col   = color.new(#FACC15, 10)
+var color entry_col   = color.new(#FACC15, 100)
 var color tp_line_col = color.new(#2563EB, 15)
 var color sl_line_col = color.new(#DC2626, 15)
 
-// Derived box fills (always >= 70 transparency to stay light on gold)
-var color box_tp     = tp_col                       // 84
+// Derived box fills
+var color box_tp     = tp_col                       // 90 — lighter, flat
 var color box_sl     = sl_col                       // 88
-var color box_entry  = color.new(#FACC15, 70)
-var color box_eglow  = color.new(#FACC15, 85)
+var color box_entry  = color.new(#FACC15, 100)      // hidden (yellow removed)
+var color box_eglow  = color.new(#FACC15, 100)      // hidden (yellow removed)
+var color box_hidden = color.new(color.gray, 100)   // for tp2 inner gradient layers
 var color ZONE_NEUT  = color.new(color.gray, 85)
 
 // Floating-label palette (premium pill aesthetic)
 var color LBL_E_C    = color.new(#0F1116, 8)
 var color LBL_TP_C   = color.new(#1D4ED8, 8)
 var color LBL_SL_C   = color.new(#EF4444, 50)
-var color LBL_MARK_C = color.new(#FACC15, 15)
+var color LBL_MARK_C = color.new(#FACC15, 100)      // hidden (yellow removed)
+var color LBL_R_C    = color.new(#0F1116, 8)        // reinforcement label background
 
 // Global execution lock — only ONE overlay cycle active across all 10 zones.
 // Stored in single-element arrays so f_zone() can mutate via array.set()
@@ -288,6 +291,7 @@ f_zone(enable, top, bot, name) =>
     var label lbl_t2     = label.new(0, 0, "", style = label.style_label_left, color = LBL_TP_C,   textcolor = color.white, size = size.small)
     var label lbl_sl     = label.new(0, 0, "", style = label.style_label_left, color = LBL_SL_C,   textcolor = color.white, size = size.small)
     var label lbl_mark   = label.new(0, 0, "", style = label.style_label_down, color = LBL_MARK_C, textcolor = #0F1116,     size = size.small, textalign = text.align_center)
+    var label lbl_r      = label.new(0, 0, "", style = label.style_label_left, color = LBL_R_C,    textcolor = color.white, size = size.small)
 
     // ── Hybrid Stable BREAK LOGIC ────────────────────────────────────
     // BUY break  : M15 high cleared zone top   AND M15 close held above zone bot.
@@ -523,16 +527,16 @@ f_zone(enable, top, bot, name) =>
             box.set_rightbottom(tp1_bx, r_idx, tp1_box_bot)
             box.set_bgcolor(tp1_bx, box_tp)
 
-            // TP2 hero — 3 layered fills (alpha compositing creates depth)
+            // TP2 hero — single-tier flat blue (gradient inner layers hidden)
             box.set_lefttop(tp2_out_bx,     e_bar, tp2_box_top)
             box.set_rightbottom(tp2_out_bx, r_idx, tp2_box_bot)
             box.set_bgcolor(tp2_out_bx, box_tp)
             box.set_lefttop(tp2_mid_bx,     e_bar, tp2_mid_top)
             box.set_rightbottom(tp2_mid_bx, r_idx, tp2_mid_bot)
-            box.set_bgcolor(tp2_mid_bx, box_tp)
+            box.set_bgcolor(tp2_mid_bx, box_hidden)
             box.set_lefttop(tp2_in_bx,     e_bar, tp2_in_top)
             box.set_rightbottom(tp2_in_bx, r_idx, tp2_in_bot)
-            box.set_bgcolor(tp2_in_bx, box_tp)
+            box.set_bgcolor(tp2_in_bx, box_hidden)
 
             // SL stop zone
             box.set_lefttop(sl_bx,     e_bar, sl_box_top)
@@ -560,10 +564,20 @@ f_zone(enable, top, bot, name) =>
             label.set_xy(lbl_sl, r_idx, sl_y)
             label.set_text(lbl_sl, "SL " + f_num(sl_v))
 
-            // Entry-point marker pinned at the trigger bar
+            // Entry-point marker pinned at the trigger bar (yellow ▲/▼ removed)
             label.set_xy(lbl_mark, e_bar, entry_y)
-            label.set_text(lbl_mark, is_buy ? "▼" : "▲")
-            label.set_style(lbl_mark, is_buy ? label.style_label_down : label.style_label_up)
+            label.set_text(lbl_mark, "")
+
+            // Reinforcement label — appears on chart when REBUY / RESELL fires.
+            // Pinned at the reinforcement price level (bot for buy side, top for sell).
+            if b2_d
+                label.set_xy(lbl_r, r_idx, bot)
+                label.set_text(lbl_r, "🟩 REBUY " + f_num(bot))
+            else if s2_d
+                label.set_xy(lbl_r, r_idx, top)
+                label.set_text(lbl_r, "🟥 RESELL " + f_num(top))
+            else
+                label.set_text(lbl_r, "")
         else
             // Hide branch — fires ONLY on real transitions
             // (active→inactive or show_trade-on→off). NOT on every tick while in
@@ -604,6 +618,8 @@ f_zone(enable, top, bot, name) =>
                 label.set_text(lbl_sl, "")
                 label.set_xy(lbl_mark, hide_x, hide_y)
                 label.set_text(lbl_mark, "")
+                label.set_xy(lbl_r, hide_x, hide_y)
+                label.set_text(lbl_r, "")
 
         // ── Zone box & label ─────────────────────────────────────────
         zone_color = mode == "BUY" ? buy_c : (mode == "SELL" ? sell_c : ZONE_NEUT)
