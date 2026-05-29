@@ -863,3 +863,107 @@ if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
 | **buy_unlock fires** | confirmed + body-opposing + ov_act | mode = "SELL" |
 | **sell_unlock fires** | confirmed + body-opposing + ov_act | mode = "BUY" |
 | **SL hit** | بـ low/high | لا تغيير (يبقى الاتجاه ليتاح إعادة المحاولة) |
+
+
+### V9.9 Hybrid Stable — Global Directional State (mode + last_flip_m15)
+
+تعديل architecture دقيق: نقل `mode` و `last_flip_m15` من **per-zone** إلى **global**. هذا يحل مشكلة جوهرية: الكسر على zone X كان لا ينعكس على mode باقي zones، فلا تُفعَّل صفقات الاتجاه الجديد على zones أخرى.
+
+#### المشكلة المُبلَّغة (مع الـ screenshots)
+> "الشمعة الحمراء كسرت منطقة 4533-4535... المفروض ياتيني تنبيه بالكسر... لكن جاءني كسر للمنطقة في الأسفل... المنطقة الخضراء لم ياتيني منها تنبيه شراء ولا صفقات"
+
+#### السبب الجذري
+
+كان `mode` معرَّفاً داخل `f_zone()` بـ `varip`، فكل استدعاء (لكل zone من الـ 10 zones) له **نسخته الخاصة المعزولة**:
+
+```pine
+f_zone(enable, top, bot, name) =>
+    varip string mode = "NONE"   // ← per-zone instance، معزول عن باقي zones
+```
+
+**الأثر**:
+- زون 4 (4533.82-4535.65) حصل له SELL break → `mode` خاص بزون 4 = "SELL" ✓
+- زون 5 (4524.45-4530.01 الأخضر) لم يكسر → `mode` خاص بزون 5 = "NONE"
+- عند retest على زون 5 (`buy_touch` هندسياً صحيح) → `if mode == "BUY"` يفشل (mode زون 5 = "NONE" وليس "BUY")
+- **النتيجة**: صفقة BUY على المنطقة الخضراء لا تُفعَّل ❌
+
+نفس المشكلة لـ multi-break alerts: عند كسر zones متعدّدة في bar واحد، كل zone يفعّل event مستقل (mode ≠ target في كل zone بشكل مستقل)، فيُحسَب `new_sell_breaks > 1` ويُطلَق MULTI BREAK مع نطاق يشمل كل zones، وهذا أيضاً مصدر الإشعار "للمنطقة في الأسفل" الذي رصده المستخدم.
+
+#### الحل: global directional state
+
+```diff
++ // === Global directional state (shared across all zones) =================
++ // mode and last_flip_m15 are global so a break on ANY zone propagates the
++ // direction to all other zones, enabling correct retest/activation flow
++ // after structural direction changes (one of the core sniper invariants).
++ varip string g_mode          = "NONE"
++ varip int    g_last_flip_m15 = -10
+
+  f_zone(enable, top, bot, name) =>
+-     varip string mode = "NONE"
+-     varip int    last_flip_m15 = -10
+```
+
+كل المراجع داخل `f_zone()` حُوِّلت إلى `g_mode` و `g_last_flip_m15`:
+
+| السطر | الحدث | السلوك بعد التعديل |
+|---|---|---|
+| 249 | barstate.isfirst | `g_mode := "NONE"` (reset عالمي على initial bar) |
+| 315 | cooldown_ok | يستخدم `g_last_flip_m15` (cooldown عالمي) |
+| 328-329 | M15 BUY break | `if g_mode != "BUY" ... g_mode := "BUY"` |
+| 340-341 | M15 SELL break | `if g_mode != "SELL" ... g_mode := "SELL"` |
+| 385 | buy_unlock_ok (body-confirmed opposing zone) | `g_mode := "SELL"` |
+| 393 | sell_unlock_ok | `g_mode := "BUY"` |
+| 419 | activation BUY gate | `if g_mode == "BUY"` |
+| 445 | activation SELL gate | `if g_mode == "SELL"` |
+| 483 | TP2 hit (SELL) | `g_mode := "BUY"` |
+| 485 | TP2 hit (BUY) | `g_mode := "SELL"` |
+| 656 | zone box color | يعتمد على `g_mode` عالمياً |
+
+#### الأثر على السلوك
+
+**1) انتشار الاتجاه عبر كل المناطق** ✅
+عند SELL break على أي zone، كل zones الأخرى ترى `g_mode = "SELL"` وتمنع buy entries. بعد TP2 hit أو unlock يقلب `g_mode = "BUY"`، فترى كل zones الأخرى الاتجاه الجديد ويصبح buy_touch قابلاً للتفعيل عليها.
+
+**2) Multi-break detection يصبح single-break** ⚠️ (تأثير جانبي مقبول)
+- قبل: `f_zone(z4)` → sb4 = true، `f_zone(z5)` → sb5 = true (because mode per-zone) → MULTI BREAK alert
+- بعد: `f_zone(z4)` → sb4 = true + g_mode := "SELL"، `f_zone(z5)` → sb5 = false (because g_mode == "SELL" already) → single BREAK alert
+
+تنبيه واحد لكل تغيُّر اتجاه (مطابق لتوقع المستخدم: "رسالة كسر واحدة"). الـ `multi_*` aggregation يبقى في الكود لكن `new_sell_breaks` لن يتجاوز 1 في الحالة الطبيعية.
+
+**3) Cooldown عالمي** ✅
+`cooldown_ok = (m15_bar_counter - g_last_flip_m15) > 1` تستخدم آخر flip عالمي، فلا يحدث flip متتابع في نفس الـ bar حتى لو zone آخر يطلب flip.
+
+#### التتبُّع الكامل لـ flow الاستراتيجية بعد التعديل
+
+```
+[1] SELL break على زون 4 (4533.82-4535.65)
+    g_mode = "NONE" -> "SELL", lock محرَّر
+    تنبيه: 🔴⬇️ M15 BREAK [4535.65 ⟶ 4533.82] (واحد فقط)
+    
+[2] SELL retest على زون 4 (close[1] < bot, ...)
+    g_mode == "SELL" ✓ → SELL entry يفعَّل
+    تنبيه: 🔴 SELL 4533.82
+    TP2 = 4530.01 (top زون 5، بعد min_gap=1.0 fix)
+    
+[3] السعر يهبط إلى 4530.01 → TP2 hit
+    SELL ينتهي، lock محرَّر، g_mode := "BUY"
+    
+[4] الآن g_mode == "BUY" لكل المناطق
+    
+[5] retest على زون 5 (close[1] > 4530.01, low ≤ 4530.51, close ≥ 4529.51)
+    g_mode == "BUY" ✓ → BUY entry يفعَّل
+    تنبيه: 🟢 BUY 4530.01 ✓
+    
+[6] تعمُّق إلى bot زون 5 (4524.45) → REBUY يفعَّل
+    تنبيه: 🟩 REBUY 4524.45 ✓
+```
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 306-307) — نفس الشروط
+- ✅ `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` — نفس الـ geometry
+- ✅ activation gate (`if not b1_d and buy_touch and can_open`) — نفس الترتيب
+- ✅ unlock body-confirmation (`f_unlock_buy` / `f_unlock_sell`) — نفس الشروط
+- ✅ TP/SL math، التعزيز، الاتجاه، object pools، rendering
+- ✅ alert messages format، entry/break alerts
+- ✅ كل التعديلات السابقة (min_gap=1.0، lock release on break، TP2/unlock mode flips) محفوظة

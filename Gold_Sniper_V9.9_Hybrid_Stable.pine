@@ -90,6 +90,13 @@ h4_just_closed  = ta.change(time("240")) != 0
 
 // M15-bar counter (chart-TF independent cooldown).
 varip int m15_bar_counter = 0
+
+// === Global directional state (shared across all zones) =================
+// g_mode and g_last_flip_m15 are global so a break on ANY zone propagates the
+// direction to all other zones, enabling correct retest/activation flow
+// after structural direction changes (one of the core sniper invariants).
+varip string g_mode = "NONE"
+varip int    g_last_flip_m15 = -10
 if m15_just_closed
     m15_bar_counter += 1
 
@@ -210,7 +217,6 @@ f_tp2_sell(b) =>
 //==================================================
 f_zone(enable, top, bot, name) =>
     // ── Persistent state ─────────────────────────────────────────────
-    varip string mode   = "NONE"
     varip bool b1_d     = false
     varip bool b2_d     = false
     varip bool s1_d     = false
@@ -231,7 +237,6 @@ f_zone(enable, top, bot, name) =>
     varip bool sell_break_sent   = false
     varip bool h1_break_sent     = false
     varip bool h4_break_sent     = false
-    varip int  last_flip_m15     = -10
 
     // ── Replay / reload hardening ────────────────────────────────────
     if barstate.isfirst
@@ -241,7 +246,7 @@ f_zone(enable, top, bot, name) =>
         s2_d   := false
         ov_act := false
         ov_dir := "NONE"
-        mode   := "NONE"
+        g_mode   := "NONE"
         array.set(_lock_arr, 0, false)
         array.set(_zone_arr, 0, "")
 
@@ -297,17 +302,17 @@ f_zone(enable, top, bot, name) =>
     // BUY break  : M15 high cleared zone top   AND M15 close held above zone bot.
     // SELL break : M15 low  pierced zone bot   AND M15 close held below zone top.
     // Wick-aware participation (high/low) + structural confirmation (close inside/past).
-    // No body-only constraint, no mode coupling, no break_state intermediates.
+    // No body-only constraint, no g_mode coupling, no break_state intermediates.
     bool final_buy_break  = m15_h > top and m15_c > bot
     bool final_sell_break = m15_l < bot and m15_c < top
 
-    // H1/H4 confirmation layers (informational only — do NOT alter mode/rotation)
+    // H1/H4 confirmation layers (informational only — do NOT alter g_mode/rotation)
     bool h1_buy_break_ok  = h1_h > top and h1_c > bot
     bool h1_sell_break_ok = h1_l < bot and h1_c < top
     bool h4_buy_break_ok  = h4_h > top and h4_c > bot
     bool h4_sell_break_ok = h4_l < bot and h4_c < top
 
-    bool cooldown_ok = (m15_bar_counter - last_flip_m15) > 1
+    bool cooldown_ok = (m15_bar_counter - g_last_flip_m15) > 1
 
     // FIX 1+3+4: barstate.isconfirmed gate prevents intrabar realtime detection.
     // M15/H1/H4 break alerts fire only on the closing tick of the chart bar.
@@ -320,9 +325,9 @@ f_zone(enable, top, bot, name) =>
     // two notifications for one event. Events flags are still set so the global
     // dispatcher continues to receive the break signal.
     if m15_just_closed and barstate.isconfirmed
-        if final_buy_break and mode != "BUY" and not buy_break_sent and cooldown_ok
-            mode := "BUY"
-            last_flip_m15  := m15_bar_counter
+        if final_buy_break and g_mode != "BUY" and not buy_break_sent and cooldown_ok
+            g_mode := "BUY"
+            g_last_flip_m15  := m15_bar_counter
             buy_break_sent := true
             buy_break_evt  := true
             // STRUCTURAL FIX: a confirmed M15 break invalidates the prior direction.
@@ -332,9 +337,9 @@ f_zone(enable, top, bot, name) =>
             // direction entry until deadlock recovery kicks in (2 bars).
             array.set(_lock_arr, 0, false)
             array.set(_zone_arr, 0, "")
-        else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
-            mode := "SELL"
-            last_flip_m15   := m15_bar_counter
+        else if final_sell_break and g_mode != "SELL" and not sell_break_sent and cooldown_ok
+            g_mode := "SELL"
+            g_last_flip_m15   := m15_bar_counter
             sell_break_sent := true
             sell_break_evt  := true
             // STRUCTURAL FIX: same release pattern for SELL direction.
@@ -369,7 +374,7 @@ f_zone(enable, top, bot, name) =>
         // FIX 5+6: barstate.isconfirmed gate prevents realtime intrabar unlock,
         // which was causing overlays to disappear/reappear during live ticks.
         // STRATEGY FLOW: unlock = body-confirmed opposing zone interaction →
-        // flip mode so the new direction's trades can activate naturally.
+        // flip g_mode so the new direction's trades can activate naturally.
         if barstate.isconfirmed and can_unlock and (b1_d or b2_d) and buy_unlock_ok
             b1_d   := false
             b2_d   := false
@@ -377,7 +382,7 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
-            mode   := "SELL"
+            g_mode   := "SELL"
         if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
             s1_d   := false
             s2_d   := false
@@ -385,10 +390,10 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
-            mode   := "BUY"
+            g_mode   := "BUY"
 
         // ── Hybrid Stable TOUCH LOGIC ────────────────────────────────
-        // Pure geometric / wick-aware sniper conditions — no break_state, no mode
+        // Pure geometric / wick-aware sniper conditions — no break_state, no g_mode
         // coupling, no body-only constraint.
         //
         // REBUY/RESELL gate on `close[1]` against the FAR edge (top for buy side,
@@ -411,7 +416,7 @@ f_zone(enable, top, bot, name) =>
         // ── Trade Activation ─────────────────────────────────────────
         // Pipeline: precondition → state set → lock acquired → THEN alert.
         // Direction flip releases the global lock cleanly along with overlay.
-        if mode == "BUY"
+        if g_mode == "BUY"
             if not b1_d and buy_touch and can_open
                 float tp2_calc = f_tp2_buy(top)
                 if math.abs(tp2_calc - top) < 0.01
@@ -437,7 +442,7 @@ f_zone(enable, top, bot, name) =>
                     rebuy_alert_sent := true
                     rebuy_evt        := true
 
-        if mode == "SELL"
+        if g_mode == "SELL"
             if not s1_d and sell_touch and can_open
                 float tp2_calc = f_tp2_sell(bot)
                 if math.abs(tp2_calc - bot) < 0.01
@@ -471,13 +476,13 @@ f_zone(enable, top, bot, name) =>
         if ov_act and (tp2_hit_buy or sl_hit_buy or tp2_hit_sell or sl_hit_sell)
             ov_act := false
             // STRATEGY FLOW: TP2 hit means price reached the next opposing zone.
-            // Flip mode so the new direction's trades can activate on that zone.
+            // Flip g_mode so the new direction's trades can activate on that zone.
             // SL hit is a price-based stop-out (not a zone-reached event), so it
-            // does NOT flip mode — user can retry the same direction.
+            // does NOT flip g_mode — user can retry the same direction.
             if tp2_hit_sell
-                mode := "BUY"
+                g_mode := "BUY"
             if tp2_hit_buy
-                mode := "SELL"
+                g_mode := "SELL"
             if array.get(_zone_arr, 0) == name
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
@@ -648,7 +653,7 @@ f_zone(enable, top, bot, name) =>
                 label.set_text(lbl_r, "")
 
         // ── Zone box & label ─────────────────────────────────────────
-        zone_color = mode == "BUY" ? buy_c : (mode == "SELL" ? sell_c : ZONE_NEUT)
+        zone_color = g_mode == "BUY" ? buy_c : (g_mode == "SELL" ? sell_c : ZONE_NEUT)
         int bx_left = math.max(0, bar_index - 4999)
         var box   bx = box.new(0, top, right_bar, bot, border_width = 0, border_color = color.new(color.white, 100))
         var label lt = label.new(right_bar, top, "", style = label.style_label_center, size = size.small)
