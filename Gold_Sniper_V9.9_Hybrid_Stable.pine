@@ -401,23 +401,28 @@ f_zone(enable, top, bot, name) =>
         // Pipeline: precondition → state set → lock acquired → THEN alert.
         // Direction flip releases the global lock cleanly along with overlay.
         if mode == "BUY"
-            if not b1_d and buy_touch and can_open
-                float tp2_calc = f_tp2_buy(top)
-                if math.abs(tp2_calc - top) < 0.01
-                    tp2_calc := top + 30
-                b1_d   := true
-                ov_act := true
-                ov_dir := "BUY"
-                e_bar  := bar_index
-                tp2_v  := tp2_calc
-                tp1_v  := top + (tp2_calc - top) / 2
-                sl_v   := bot - 3
-                array.set(_lock_arr, 0, true)
-                array.set(_zone_arr, 0, name)
+            // P1 — touch alert DECOUPLED from the global lock. A valid BUY touch
+            // always notifies, even if another zone currently holds the lock.
+            // Trade activation (state set + lock acquisition) stays gated by
+            // can_open, so V9.9's single-trade invariant is preserved unchanged.
+            if not b1_d and buy_touch
                 if not buy_alert_sent
                     alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar)
                     buy_alert_sent := true
                     buy_evt        := true
+                if can_open
+                    float tp2_calc = f_tp2_buy(top)
+                    if math.abs(tp2_calc - top) < 0.01
+                        tp2_calc := top + 30
+                    b1_d   := true
+                    ov_act := true
+                    ov_dir := "BUY"
+                    e_bar  := bar_index
+                    tp2_v  := tp2_calc
+                    tp1_v  := top + (tp2_calc - top) / 2
+                    sl_v   := bot - 3
+                    array.set(_lock_arr, 0, true)
+                    array.set(_zone_arr, 0, name)
             // REBUY — same-candle activation possible (sequential if, no else gate).
             if b1_d and not b2_d and rebuy_touch
                 b2_d := true
@@ -427,23 +432,28 @@ f_zone(enable, top, bot, name) =>
                     rebuy_evt        := true
 
         if mode == "SELL"
-            if not s1_d and sell_touch and can_open
-                float tp2_calc = f_tp2_sell(bot)
-                if math.abs(tp2_calc - bot) < 0.01
-                    tp2_calc := bot - 30
-                s1_d   := true
-                ov_act := true
-                ov_dir := "SELL"
-                e_bar  := bar_index
-                tp2_v  := tp2_calc
-                tp1_v  := bot - (bot - tp2_calc) / 2
-                sl_v   := top + 3
-                array.set(_lock_arr, 0, true)
-                array.set(_zone_arr, 0, name)
+            // P1 — touch alert DECOUPLED from the global lock. A valid SELL touch
+            // always notifies, even if another zone currently holds the lock.
+            // Trade activation (state set + lock acquisition) stays gated by
+            // can_open, so V9.9's single-trade invariant is preserved unchanged.
+            if not s1_d and sell_touch
                 if not sell_alert_sent
                     alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
                     sell_alert_sent := true
                     sell_evt        := true
+                if can_open
+                    float tp2_calc = f_tp2_sell(bot)
+                    if math.abs(tp2_calc - bot) < 0.01
+                        tp2_calc := bot - 30
+                    s1_d   := true
+                    ov_act := true
+                    ov_dir := "SELL"
+                    e_bar  := bar_index
+                    tp2_v  := tp2_calc
+                    tp1_v  := bot - (bot - tp2_calc) / 2
+                    sl_v   := top + 3
+                    array.set(_lock_arr, 0, true)
+                    array.set(_zone_arr, 0, name)
             // RESELL — same-candle activation possible.
             if s1_d and not s2_d and resell_touch
                 s2_d := true
