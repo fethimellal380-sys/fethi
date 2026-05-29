@@ -154,7 +154,7 @@ f_unlock_buy(b, o, c) => (z1 and v1_t < b and (o <= v1_t or c <= v1_t) and c >= 
 // 🎯 TP2 Engine — opposite-zone target with min-gap validation (preserved)
 //==================================================
 f_tp2_buy(t) =>
-    float min_gap     = 5.0
+    float min_gap     = 1.0
     float fallback_dx = 30.0
     float r           = t + fallback_dx
     if z1  and v1_b  > t + min_gap
@@ -180,7 +180,7 @@ f_tp2_buy(t) =>
     r
 
 f_tp2_sell(b) =>
-    float min_gap     = 5.0
+    float min_gap     = 1.0
     float fallback_dx = 30.0
     float r           = b - fallback_dx
     if z1  and v1_t  < b - min_gap
@@ -368,6 +368,8 @@ f_zone(enable, top, bot, name) =>
         bool sell_unlock_ok = f_unlock_buy(bot,  open, close)
         // FIX 5+6: barstate.isconfirmed gate prevents realtime intrabar unlock,
         // which was causing overlays to disappear/reappear during live ticks.
+        // STRATEGY FLOW: unlock = body-confirmed opposing zone interaction →
+        // flip mode so the new direction's trades can activate naturally.
         if barstate.isconfirmed and can_unlock and (b1_d or b2_d) and buy_unlock_ok
             b1_d   := false
             b2_d   := false
@@ -375,6 +377,7 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
+            mode   := "SELL"
         if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
             s1_d   := false
             s2_d   := false
@@ -382,6 +385,7 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
+            mode   := "BUY"
 
         // ── Hybrid Stable TOUCH LOGIC ────────────────────────────────
         // Pure geometric / wick-aware sniper conditions — no break_state, no mode
@@ -466,6 +470,14 @@ f_zone(enable, top, bot, name) =>
         bool sl_hit_sell  = ov_dir == "SELL" and high >= sl_v
         if ov_act and (tp2_hit_buy or sl_hit_buy or tp2_hit_sell or sl_hit_sell)
             ov_act := false
+            // STRATEGY FLOW: TP2 hit means price reached the next opposing zone.
+            // Flip mode so the new direction's trades can activate on that zone.
+            // SL hit is a price-based stop-out (not a zone-reached event), so it
+            // does NOT flip mode — user can retry the same direction.
+            if tp2_hit_sell
+                mode := "BUY"
+            if tp2_hit_buy
+                mode := "SELL"
             if array.get(_zone_arr, 0) == name
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")

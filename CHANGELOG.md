@@ -769,3 +769,97 @@ if not b1_d and buy_touch and can_open
 - ✅ unlock engine (body-confirmed buy_unlock_ok / sell_unlock_ok) — لم يُمَس
 - ✅ TP/SL math، التعزيز، الاتجاه، object pools، rendering pipeline
 - ✅ alert() messages format، entry alerts (BUY/SELL/REBUY/RESELL)، break alerts (M15/H1/H4)
+
+
+### V9.9 Hybrid Stable — Strategy Flow at Zone Boundaries
+
+ثلاثة تعديلات جراحية لتفعيل الـ flow الصحيح: **كل منطقة تنهي صفقات الاتجاه السابق وتبدأ صفقات الاتجاه الجديد**.
+
+#### المشكلة المُبلَّغة
+> "المفروض هنا تاتي صفقه شراء وشراء تعزيزي وتنتهي صفقه البيع التي في الاعلى... كل منطقه تنتهي عندها صفقات"
+
+السلوك المرصود: صفقة SELL ممتدة تتجاوز المنطقة الخضراء (BUY zone) دون أن تنتهي، ولا تُفعَّل صفقة BUY/REBUY على المنطقة الخضراء.
+
+#### التشخيص
+
+**المشكلة 1**: `min_gap = 5.0` في `f_tp2_buy`/`f_tp2_sell` يَتَخَطَّى المنطقة المعاكسة المجاورة:
+- مثال: SELL على bot=4533.82
+- المنطقة الخضراء التالية: top=4530.01 (الفرق 3.81 < 5)
+- النتيجة: TP2 يتجاوز المنطقة الخضراء ويذهب لـ ~4503
+
+**المشكلة 2**: حتى لو وصل السعر للـ TP2 وأغلقت SELL، الـ `mode` يبقى `"SELL"` فلا تُفعَّل BUY على المنطقة الخضراء (`if mode == "BUY"` لا ينطلق).
+
+**المشكلة 3**: على unlock (body-confirmed opposing interaction)، الـ `mode` لا يُقلَب أيضاً.
+
+#### الإصلاحات
+
+**1) `min_gap` من `5.0` إلى `1.0` في كلا `f_tp2_buy` و `f_tp2_sell`**:
+```diff
+- float min_gap     = 5.0
++ float min_gap     = 1.0
+```
+المناطق المتجاورة (بفرق ≥ 1 نقطة) تصبح مرشحات صالحة لـ TP2. المنطقة الخضراء الآن تُعتمَد كهدف TP2 لصفقة SELL أعلاها.
+
+**2) Mode flip على TP2 hit** (داخل overlay removal block):
+```pine
+if ov_act and (tp2_hit_buy or sl_hit_buy or tp2_hit_sell or sl_hit_sell)
+    ov_act := false
+    // STRATEGY FLOW: TP2 hit = price reached the next opposing zone.
+    // Flip mode so new direction trades can activate on that zone.
+    // SL hit is a price-based stop-out (not zone-reached), so it does NOT flip.
+    if tp2_hit_sell
+        mode := "BUY"
+    if tp2_hit_buy
+        mode := "SELL"
+    ...
+```
+
+**3) Mode flip على unlock** (داخل buy_unlock / sell_unlock blocks):
+```pine
+if barstate.isconfirmed and can_unlock and (b1_d or b2_d) and buy_unlock_ok
+    ...
+    ov_act := false
+    mode   := "SELL"   // body-confirmed opposing zone → flip mode
+
+if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
+    ...
+    ov_act := false
+    mode   := "BUY"
+```
+
+**ملاحظة مهمة**: SL hit **لا يقلب mode**. السبب: SL هو price-based stop-out (entry ± 3 خارج الزون)، وليس "وصول لمنطقة معاكسة". المستخدم يبقى في الاتجاه الحالي ليتاح إعادة المحاولة.
+
+#### الـ Flow الصحيح بعد التعديل
+
+سيناريو SELL → BUY:
+1. صفقة SELL مفعَّلة على zone X (entry = bot)
+2. TP2 يحسب الآن المنطقة المعاكسة المجاورة (top of next BUY zone) — لم يَتَخَطَّاها
+3. السعر يهبط ويصل إلى TP2 (= top المنطقة الخضراء)
+4. SELL تنتهي: `ov_act := false`، lock تحرَّر، `mode := "BUY"`
+5. الآن `if mode == "BUY"` يصبح true في كل zone
+6. عند retest المنطقة الخضراء (close[1] > top، wick into top، close near top): BUY يفعَّل + تنبيه `🟢 BUY <price>`
+7. تعمُّق الشمعة لـ bot المنطقة الخضراء: REBUY يفعَّل + تنبيه `🟩 REBUY <price>`
+
+سيناريو متناظر BUY → SELL.
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 301-302)
+- ✅ `buy_touch` / `sell_touch` / `rebuy_touch` / `resell_touch` (السطور 404-407)
+- ✅ Activation gate (`if not b1_d and buy_touch and can_open`)
+- ✅ Unlock conditions (body-confirmed `f_unlock_buy/sell`)
+- ✅ TP/SL math، التعزيز، object pools، rendering، palette
+- ✅ Alert messages format، entry alerts، break alerts
+- ✅ M15 break detection logic + lock release من commit 98b78ae
+
+#### التتبُّع الكامل لـ mode flip
+
+| نقطة الـ flip | الشرط | النتيجة |
+|---|---|---|
+| `barstate.isfirst` | init | mode = "NONE" |
+| M15 BUY break | confirmed + final_buy_break + cooldown | mode = "BUY" |
+| M15 SELL break | confirmed + final_sell_break + cooldown | mode = "SELL" |
+| **TP2 hit (SELL)** | low ≤ tp2_v | mode = "BUY" |
+| **TP2 hit (BUY)** | high ≥ tp2_v | mode = "SELL" |
+| **buy_unlock fires** | confirmed + body-opposing + ov_act | mode = "SELL" |
+| **sell_unlock fires** | confirmed + body-opposing + ov_act | mode = "BUY" |
+| **SL hit** | بـ low/high | لا تغيير (يبقى الاتجاه ليتاح إعادة المحاولة) |
