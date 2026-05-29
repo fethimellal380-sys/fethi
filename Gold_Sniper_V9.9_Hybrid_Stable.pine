@@ -326,21 +326,11 @@ f_zone(enable, top, bot, name) =>
             last_flip_m15  := m15_bar_counter
             buy_break_sent := true
             buy_break_evt  := true
-            // STRUCTURAL FIX: a confirmed M15 break invalidates the prior direction.
-            // Release stale global lock so new BUY zones can activate via touch.
-            // Without this, sharp direction flips that didn't trigger a natural
-            // unlock leave the lock held by the old direction, blocking new
-            // direction entry until deadlock recovery kicks in (2 bars).
-            array.set(_lock_arr, 0, false)
-            array.set(_zone_arr, 0, "")
         else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
             mode := "SELL"
             last_flip_m15   := m15_bar_counter
             sell_break_sent := true
             sell_break_evt  := true
-            // STRUCTURAL FIX: same release pattern for SELL direction.
-            array.set(_lock_arr, 0, false)
-            array.set(_zone_arr, 0, "")
 
     if use_h1_break and h1_just_closed and barstate.isconfirmed and not h1_break_sent
         if h1_buy_break_ok
@@ -369,8 +359,8 @@ f_zone(enable, top, bot, name) =>
         bool sell_unlock_ok = f_unlock_buy(bot,  open, close)
         // FIX 5+6: barstate.isconfirmed gate prevents realtime intrabar unlock,
         // which was causing overlays to disappear/reappear during live ticks.
-        // STRATEGY FLOW: unlock = body-confirmed opposing zone interaction →
-        // flip mode so the new direction's trades can activate naturally.
+        // V9.9 ORIGINAL: unlock ONLY releases the active trade — it does NOT
+        // force a new direction. mode is driven solely by M15 break.
         if barstate.isconfirmed and can_unlock and (b1_d or b2_d) and buy_unlock_ok
             b1_d   := false
             b2_d   := false
@@ -378,7 +368,6 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
-            mode   := "SELL"
         if barstate.isconfirmed and can_unlock and (s1_d or s2_d) and sell_unlock_ok
             s1_d   := false
             s2_d   := false
@@ -386,7 +375,6 @@ f_zone(enable, top, bot, name) =>
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
             ov_act := false
-            mode   := "BUY"
 
         // ── Hybrid Stable TOUCH LOGIC ────────────────────────────────
         // Pure geometric / wick-aware sniper conditions — no break_state, no mode
@@ -471,14 +459,9 @@ f_zone(enable, top, bot, name) =>
         bool sl_hit_sell  = ov_dir == "SELL" and high >= sl_v
         if ov_act and (tp2_hit_buy or sl_hit_buy or tp2_hit_sell or sl_hit_sell)
             ov_act := false
-            // STRATEGY FLOW: TP2 hit means price reached the next opposing zone.
-            // Flip mode so the new direction's trades can activate on that zone.
-            // SL hit is a price-based stop-out (not a zone-reached event), so it
-            // does NOT flip mode — user can retry the same direction.
-            if tp2_hit_sell
-                mode := "BUY"
-            if tp2_hit_buy
-                mode := "SELL"
+            // V9.9 ORIGINAL: TP2/SL hit ONLY removes the overlay and releases the
+            // lock. It does NOT change mode — direction is driven solely by M15
+            // break (no artificial rotation at zone boundaries).
             if array.get(_zone_arr, 0) == name
                 array.set(_lock_arr, 0, false)
                 array.set(_zone_arr, 0, "")
@@ -499,14 +482,13 @@ f_zone(enable, top, bot, name) =>
         // the overlay does not disappear due to mid-bar ov_act flicker.
         r_idx = right_bar
 
-        // ── Stable overlay visibility guard (visual-only, no strategy impact) ──
-        // overlay_visible draws while EITHER:
-        //   • the trade is currently active (ov_act), OR
-        //   • a per-zone state flag survives a transient ov_act flicker AND this
-        //     zone still owns the global lock (zone name match). After TP2/SL or
-        //     unlock, the lock is released and the second clause becomes false,
-        //     so the overlay disappears cleanly without flicker.
-        bool overlay_visible = ov_act or ((b1_d or b2_d or s1_d or s2_d) and array.get(_zone_arr, 0) == name)
+        // ── Stable overlay visibility (visual-only, no strategy impact) ──
+        // V9.9 ORIGINAL: the overlay is visible exactly while the trade is active
+        // (ov_act). The previous zone-match guard (… and _zone_arr == name) caused
+        // an active zone's drawing to vanish whenever ANOTHER zone cleared the
+        // global lock. Reverting to plain ov_act keeps the drawing on screen until
+        // the strategy's own cancel condition (TP2 / SL / unlock) sets ov_act=false.
+        bool overlay_visible = ov_act
 
         if show_trade and overlay_visible
             float top_y   = top
