@@ -42,8 +42,8 @@ var color tp_border   = color.new(#2563EB, 25)
 var color sl_col      = color.new(#EF4444, 88)
 var color sl_border   = color.new(#DC2626, 20)
 var color entry_col   = color.new(#FACC15, 100)
-var color tp_line_col = color.new(#2563EB, 15)
-var color sl_line_col = color.new(#DC2626, 15)
+var color tp_line_col = color.new(#2563EB, 100)     // solid line deleted per user
+var color sl_line_col = color.new(#DC2626, 100)     // solid line deleted per user
 
 // Derived box fills
 var color box_tp     = tp_col                       // 90 — lighter, flat

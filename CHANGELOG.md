@@ -586,3 +586,45 @@ if not b1_d and buy_touch and can_open
 - ✅ Touch geometry (4 conditions) — السطور 390-393
 - ✅ Activation/unlock/mode/TP/SL/object pools — صفر تغيير
 - ✅ Break alerts (M15/H1/H4) بقيت `freq_once_per_bar_close` (لا تُمَس)
+
+
+### V9.9 Hybrid Stable — Reference Lines Cleanup
+
+تعديل سطرين على ثوابت لون الـ reference lines المستمرة لإزالتها كلياً، مع الإبقاء على الخط المتقطّع الرفيع فقط.
+
+#### الطلب
+> "الخطوط مشار عليها باسهم احذفهم... والمسار عليهم بداوئر خط متقطع رفيع"
+
+تفسير: حذف الخطوط الأفقية المستمرة (TP2 و SL) والإبقاء على الخط المتقطّع الرفيع (TP1) فقط.
+
+#### التعديل
+
+```diff
+- var color tp_line_col = color.new(#2563EB, 15)
++ var color tp_line_col = color.new(#2563EB, 100)     // solid line deleted per user
+
+- var color sl_line_col = color.new(#DC2626, 15)
++ var color sl_line_col = color.new(#DC2626, 100)     // solid line deleted per user
+```
+
+`tp_line_col` يُستخدم فقط لـ `t2_ln` (خط TP2 المستمر 2px). `sl_line_col` يُستخدم فقط لـ `sl_ln` (خط SL المستمر 1px). جعلهما شفافين كلياً يُلغي رؤيتهما دون لمس بنية الـ `var line` في الـ object pool.
+
+#### الحالة البصرية بعد التعديل
+
+| العنصر | السلوك |
+|---|---|
+| `tp1_bx` (TP1 area light blue) | ✅ مرئي |
+| `tp2_out_bx` (TP2 area + border) | ✅ مرئي مع border رفيع أزرق |
+| `sl_bx` (SL area + border) | ✅ مرئي مع border رفيع أحمر |
+| `t1_ln` (TP1 dashed thin) | ✅ مرئي — الخط المتقطّع الرفيع الوحيد المتبقّي |
+| `t2_ln` (TP2 solid 2px) | ❌ مخفي |
+| `sl_ln` (SL solid 1px) | ❌ مخفي |
+| `e_ln` (Entry dashed yellow) | ❌ مخفي (سابقاً في commit `8a2ea3c`) |
+| Labels (BUY/REBUY/SELL/RESELL/TP1/TP2/SL) | ✅ مرئية |
+| `lbl_r` (Reinforcement label) | ✅ مرئي عند تفعيل b2_d/s2_d |
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 297-298)
+- ✅ touch geometry (4 conditions) — السطور 390-393
+- ✅ activation / unlock / mode / break / TP/SL / object pools — صفر تغيير
+- ✅ Architecture، rendering pipeline، palette structure — صفر تغيير
