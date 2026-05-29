@@ -698,3 +698,74 @@ if not b1_d and buy_touch and can_open
 - ✅ touch geometry (4 conditions)
 - ✅ activation / unlock / mode / break / TP/SL math
 - ✅ Object pool structure، architecture، palette structure
+
+
+### V9.9 Hybrid Stable — Break Alert De-dupe + SELL Activation Fix
+
+تعديلان مستهدفان لحلّ مشكلتين فعليتين أبلغ عنهما المستخدم.
+
+#### المشكلة 1: تكرار رسائل الكسر
+
+> "ماهدا الخلط مفرض رسالة كسر واحدة لماذا اثنان"
+
+**السبب**: `alertcondition(true, title = "Any alert() function call", message = "Gold Sniper alert")` على السطر 817 (في commit `faaf8a4` السابق). هذه catch-all alertcondition تطلق UI alert إضافياً **لكل** استدعاء `alert()` إذا فعَّلها المستخدم في TradingView UI إلى جانب الـ alerts المباشرة. النتيجة: لكل كسر تنبيهان: واحد من `alert()` المباشرة، وآخر من الـ catch-all.
+
+**الإصلاح**: حذف الـ catch-all alertcondition. كل `alert()` يُنتج الآن إشعاراً واحداً فقط.
+
+```diff
+- alertcondition(true, title = "Any alert() function call", message = "Gold Sniper alert")
++ // (Removed: catch-all alertcondition was duplicating every alert() invocation
++ //  when activated via TradingView UI alongside the direct alert() calls.)
+```
+
+#### المشكلة 2: SELL/RESELL لا يصل عند تفعيل صفقة بيع
+
+> "تفعلت صفقة بيع لكن لا تنبيه بيع او تعزيز بيع وصلني"
+
+**السبب الجذري**: `_lock_arr` (global lock) محبوس من اتجاه سابق. سيناريو:
+1. صفقة BUY سابقة فعَّلت زون X وحجزت `_lock_arr`
+2. السعر يكسر للأسفل بشدّة بدون تفعيل `buy_unlock_ok` (يتطلب body interaction مع زون بيع آخر بشروط صارمة)
+3. الـ lock يبقى محبوساً على زون X
+4. M15 sell break يتأكَّد على إغلاق الـ bar → `mode := "SELL"`
+5. SELL touch يفحص `can_open = not lock or zone_arr == name` → false (الـ lock محجوز)
+6. SELL entry **يُحجَب** ولا يُطلق تنبيهاً
+
+في commit `499cd08` السابق حُذفت reverse direction flip blocks اعتماداً على "natural unlock فقط". لكن unlock له شروط body-confirmed صارمة لا تتحقَّق دائماً عند التحرُّكات السريعة.
+
+**الإصلاح (لا يعارض الاستراتيجية)**: عند تأكيد M15 break (بنية مؤكَّدة على bar close)، نحرِّر الـ global lock. هذا **مختلف** عن reverse flip القديم (الذي كان يعمل عند كل activation): الإفراج الجديد محصور في **حدث structural confirmed** (M15 close + final_buy_break/final_sell_break + cooldown_ok)، فلا يتعارض مع منطق "natural unlock" للـ activation.
+
+```diff
+        if final_buy_break and mode != "BUY" and not buy_break_sent and cooldown_ok
+            mode := "BUY"
+            last_flip_m15  := m15_bar_counter
+            buy_break_sent := true
+            buy_break_evt  := true
++           // STRUCTURAL FIX: a confirmed M15 break invalidates the prior direction.
++           // Release stale global lock so new BUY zones can activate via touch.
++           array.set(_lock_arr, 0, false)
++           array.set(_zone_arr, 0, "")
+        else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
+            mode := "SELL"
+            last_flip_m15   := m15_bar_counter
+            sell_break_sent := true
+            sell_break_evt  := true
++           // STRUCTURAL FIX: same release pattern for SELL direction.
++           array.set(_lock_arr, 0, false)
++           array.set(_zone_arr, 0, "")
+```
+
+#### السلوك بعد التعديل
+
+| الحدث | قبل | بعد |
+|---|---|---|
+| `alert()` ينطلق + alertcondition catch-all | إشعاران للحدث الواحد | ✅ إشعار واحد فقط |
+| BUY trade مفعَّل → سعر يكسر للأسفل بدون unlock طبيعي → SELL break يتأكَّد → SELL touch | ❌ SELL entry محجوب (lock محبوس) | ✅ SELL entry يفعَّل، تنبيه يصل |
+| BUY trade مفعَّل → سعر يهبط لزون SELL مع body interaction → unlock طبيعي يطلق → SELL break يتأكَّد → SELL touch | ✅ يعمل (السلوك الأصلي) | ✅ يعمل (لم يتغيَّر) |
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break` (السطور 301-302)
+- ✅ touch geometry (4 conditions) — السطور 400-403
+- ✅ activation gate logic (`if not b1_d and buy_touch and can_open`) — لم تُمَس
+- ✅ unlock engine (body-confirmed buy_unlock_ok / sell_unlock_ok) — لم يُمَس
+- ✅ TP/SL math، التعزيز، الاتجاه، object pools، rendering pipeline
+- ✅ alert() messages format، entry alerts (BUY/SELL/REBUY/RESELL)، break alerts (M15/H1/H4)

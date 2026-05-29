@@ -325,11 +325,21 @@ f_zone(enable, top, bot, name) =>
             last_flip_m15  := m15_bar_counter
             buy_break_sent := true
             buy_break_evt  := true
+            // STRUCTURAL FIX: a confirmed M15 break invalidates the prior direction.
+            // Release stale global lock so new BUY zones can activate via touch.
+            // Without this, sharp direction flips that didn't trigger a natural
+            // unlock leave the lock held by the old direction, blocking new
+            // direction entry until deadlock recovery kicks in (2 bars).
+            array.set(_lock_arr, 0, false)
+            array.set(_zone_arr, 0, "")
         else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
             mode := "SELL"
             last_flip_m15   := m15_bar_counter
             sell_break_sent := true
             sell_break_evt  := true
+            // STRUCTURAL FIX: same release pattern for SELL direction.
+            array.set(_lock_arr, 0, false)
+            array.set(_zone_arr, 0, "")
 
     if use_h1_break and h1_just_closed and barstate.isconfirmed and not h1_break_sent
         if h1_buy_break_ok
@@ -814,4 +824,7 @@ alertcondition(h1_buy_break_global,      title = "H1 BUY BREAK",         message
 alertcondition(h1_sell_break_global,     title = "H1 SELL BREAK",        message = "🔴⬇️ H1 BREAK")
 alertcondition(h4_buy_break_global,      title = "H4 BUY BREAK",         message = "🟢⬆️ H4 BREAK")
 alertcondition(h4_sell_break_global,     title = "H4 SELL BREAK",        message = "🔴⬇️ H4 BREAK")
-alertcondition(true, title = "Any alert() function call", message = "Gold Sniper alert")
+// (Removed: catch-all `alertcondition(true, "Any alert() function call", ...)` —
+// was duplicating every alert() invocation when users activated it via the
+// TradingView UI alongside the direct alert() calls already firing from this
+// script. Each direct alert() now produces exactly one notification.)
