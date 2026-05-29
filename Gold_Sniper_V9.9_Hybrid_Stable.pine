@@ -42,8 +42,8 @@ var color tp_border   = color.new(#2563EB, 25)
 var color sl_col      = color.new(#EF4444, 88)
 var color sl_border   = color.new(#DC2626, 20)
 var color entry_col   = color.new(#FACC15, 100)
-var color tp_line_col = color.new(#2563EB, 100)     // solid line deleted per user
-var color sl_line_col = color.new(#DC2626, 100)     // solid line deleted per user
+var color tp_line_col = color.new(#2563EB, 25)      // thin dashed reference line (re-enabled)
+var color sl_line_col = color.new(#DC2626, 25)      // thin dashed reference line (re-enabled)
 
 // Derived box fills
 var color box_tp     = tp_col                       // 90 — lighter, flat
@@ -276,15 +276,15 @@ f_zone(enable, top, bot, name) =>
 
     // ── Persistent overlay object pool (preserved from V9.9) ─────────
     var box   tp1_bx     = box.new(0, 0, 0, 0, border_width = 0)
-    var box   tp2_out_bx = box.new(0, 0, 0, 0, border_width = 1, border_color = tp_border)
+    var box   tp2_out_bx = box.new(0, 0, 0, 0, border_width = 0)
     var box   tp2_mid_bx = box.new(0, 0, 0, 0, border_width = 0)
     var box   tp2_in_bx  = box.new(0, 0, 0, 0, border_width = 0)
-    var box   sl_bx      = box.new(0, 0, 0, 0, border_width = 1, border_color = sl_border)
+    var box   sl_bx      = box.new(0, 0, 0, 0, border_width = 0)
     var box   e_glow_bx  = box.new(0, 0, 0, 0, border_width = 0)
     var box   e_bx       = box.new(0, 0, 0, 0, border_width = 0)
     var line  t1_ln      = line.new(0, 0, 0, 0, color = tp_border,    style = line.style_dashed, width = 1)
-    var line  t2_ln      = line.new(0, 0, 0, 0, color = tp_line_col,  style = line.style_solid,  width = 2)
-    var line  sl_ln      = line.new(0, 0, 0, 0, color = sl_line_col,  style = line.style_solid,  width = 1)
+    var line  t2_ln      = line.new(0, 0, 0, 0, color = tp_line_col,  style = line.style_dashed, width = 1)
+    var line  sl_ln      = line.new(0, 0, 0, 0, color = sl_line_col,  style = line.style_dashed, width = 1)
     var line  e_ln       = line.new(0, 0, 0, 0, color = entry_col,    style = line.style_dashed, width = 1)
     var label lbl_e      = label.new(0, 0, "", style = label.style_label_left, color = LBL_E_C,    textcolor = color.white, size = size.small)
     var label lbl_t1     = label.new(0, 0, "", style = label.style_label_left, color = LBL_TP_C,   textcolor = color.white, size = size.small)

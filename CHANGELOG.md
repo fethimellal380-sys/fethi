@@ -628,3 +628,73 @@ if not b1_d and buy_touch and can_open
 - ✅ touch geometry (4 conditions) — السطور 390-393
 - ✅ activation / unlock / mode / break / TP/SL / object pools — صفر تغيير
 - ✅ Architecture، rendering pipeline، palette structure — صفر تغيير
+
+
+### V9.9 Hybrid Stable — Borderless Boxes + All-Dashed Reference Lines
+
+تعديلات بصرية لتنظيف الـ overlay: حذف الخطوط العمودية (حواف البوكسات) وتوحيد الخطوط الأفقية كخطوط متقطّعة رفيعة.
+
+#### الطلب
+> "الخطوط الافقية الزرقاء المشار عليها بداىرة قم بجعلها خطوط متقعة والخطوط العمودية المشار عليها باسهم احذفها او اجعلها شفافة"
+
+تفسير دقيق:
+- **الخطوط الأفقية الزرقاء** (TP2/TP1) = أهداف TP الأفقية → **اجعلها متقطّعة**
+- **الخطوط العمودية** = حواف البوكسات اليسرى/اليمنى من `border_width = 1` → **احذفها**
+
+#### التعديلات (5 نقاط)
+
+**1) إعادة تفعيل ألوان الـ reference lines** (كانت مخفية بالشفافية 100):
+```diff
+- var color tp_line_col = color.new(#2563EB, 100)     // solid line deleted per user
+- var color sl_line_col = color.new(#DC2626, 100)     // solid line deleted per user
++ var color tp_line_col = color.new(#2563EB, 25)      // thin dashed reference line (re-enabled)
++ var color sl_line_col = color.new(#DC2626, 25)      // thin dashed reference line (re-enabled)
+```
+
+**2) تحويل t2_ln من solid 2px إلى dashed 1px**:
+```diff
+- var line  t2_ln  = line.new(0, 0, 0, 0, color = tp_line_col,  style = line.style_solid,  width = 2)
++ var line  t2_ln  = line.new(0, 0, 0, 0, color = tp_line_col,  style = line.style_dashed, width = 1)
+```
+
+**3) تحويل sl_ln من solid إلى dashed** (للتناظر):
+```diff
+- var line  sl_ln  = line.new(0, 0, 0, 0, color = sl_line_col,  style = line.style_solid,  width = 1)
++ var line  sl_ln  = line.new(0, 0, 0, 0, color = sl_line_col,  style = line.style_dashed, width = 1)
+```
+
+**4) حذف border البوكس tp2_out_bx** (يُلغي الحواف العمودية + الأفقية للبوكس):
+```diff
+- var box   tp2_out_bx = box.new(0, 0, 0, 0, border_width = 1, border_color = tp_border)
++ var box   tp2_out_bx = box.new(0, 0, 0, 0, border_width = 0)
+```
+
+**5) حذف border البوكس sl_bx**:
+```diff
+- var box   sl_bx      = box.new(0, 0, 0, 0, border_width = 1, border_color = sl_border)
++ var box   sl_bx      = box.new(0, 0, 0, 0, border_width = 0)
+```
+
+#### السلوك بعد التعديل
+
+| العنصر | قبل | بعد |
+|---|---|---|
+| `t1_ln` (TP1 reference) | dashed, blue | ✅ dashed, blue (لم يتغيّر) |
+| `t2_ln` (TP2 reference) | مخفي | ✅ dashed thin, blue (مرئي الآن) |
+| `sl_ln` (SL reference) | مخفي | ✅ dashed thin, red (مرئي الآن) |
+| `e_ln` (Entry yellow) | مخفي | ❌ مخفي (yellow transparency 100) |
+| `tp2_out_bx` border | 1px outline | ❌ بدون border (vertical+horizontal edges removed) |
+| `sl_bx` border | 1px outline | ❌ بدون border |
+| `tp1_bx`, `tp2_mid_bx`, `tp2_in_bx`, `e_bx`, `e_glow_bx` | border_width=0 | ❌ بدون border (لم تتغيّر) |
+| Box fills (TP1, TP2, SL areas) | مرئية | ✅ مرئية (لم تتغيّر) |
+
+#### النتيجة البصرية
+- 🟦 ثلاث مساحات (TP1, TP2, SL) **بدون أي حواف** (لا vertical لا horizontal من البوكسات)
+- ┄┄┄ ثلاثة خطوط أفقية متقطّعة رفيعة عند: TP1، TP2، SL (تشير لمستويات الأسعار بشكل نظيف)
+- 🏷️ Labels (BUY/REBUY/SELL/RESELL/TP1/TP2/SL + lbl_r reinforcement)
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ `final_buy_break` / `final_sell_break`
+- ✅ touch geometry (4 conditions)
+- ✅ activation / unlock / mode / break / TP/SL math
+- ✅ Object pool structure، architecture، palette structure
