@@ -464,3 +464,57 @@ if show_trade and overlay_visible
 - ✅ شروط BUY/SELL/REBUY/RESELL activation
 - ✅ TP/SL math، التعزيز، الاتجاه، break logic، unlock engine
 - ✅ Object pools structure، architecture، naming
+
+
+### V9.9 Hybrid Stable — De-dupe Break Alerts
+
+تعديل سطرين فقط لمعالجة شكوى المستخدم بـ "تكرار تنبيهات الكسر".
+
+#### المشكلة المُبلَّغة
+> "لاحظ جاءني 2 فحص انبيهات الكسر وصفقات يوجد تكرار"
+
+كان للكسر الواحد مصدران للتنبيه يطلقان معاً على نفس bar الإغلاق:
+
+| المصدر | السطر السابق | الرسالة |
+|---|---|---|
+| Per-zone (داخل `f_zone`) | 321 | `🟢 BREAK BUY <price>` |
+| Global aggregator | 768 | `🟢⬆️ M15 BREAK [bot ⟶ top]` |
+
+كلاهما `alert.freq_once_per_bar_close`، فيُسلَّمان معاً عند إغلاق الـ bar = إشعاران للحدث الواحد.
+
+#### الإصلاح
+
+حُذف الـ per-zone alerts فقط (السطر 321 و 328 من commit `8a62336` السابق — كانا إضافة FIX 8 من الـ Safe Fix Pack):
+
+```diff
+        if final_buy_break and mode != "BUY" and not buy_break_sent and cooldown_ok
+            mode := "BUY"
+            last_flip_m15  := m15_bar_counter
+            buy_break_sent := true
+            buy_break_evt  := true
+-           alert("🟢 BREAK BUY " + f_num(top), alert.freq_once_per_bar_close)
+        else if final_sell_break and mode != "SELL" and not sell_break_sent and cooldown_ok
+            mode := "SELL"
+            last_flip_m15   := m15_bar_counter
+            sell_break_sent := true
+            sell_break_evt  := true
+-           alert("🔴 BREAK SELL " + f_num(bot), alert.freq_once_per_bar_close)
+```
+
+`buy_break_evt := true` / `sell_break_evt := true` **لم يُمَسّا** فالـ global aggregator يستمر في استقبال الإشارة وإطلاق التنبيه القانوني الواحد.
+
+#### النتيجة بعد التعديل
+
+| الحدث | عدد التنبيهات |
+|---|---|
+| كسر M15 single (zone واحد) | 1 (`🟢⬆️ / 🔴⬇️ M15 BREAK [bot ⟶ top]`) |
+| كسر M15 multi (عدة zones) | 1 (`🟢⏫ / 🔴⏬ M15 MULTI BREAK [low ⟶ high]`) |
+| دخول BUY/SELL | 1 لكل |
+| تعزيز REBUY/RESELL | 1 لكل |
+| كسر H1/H4 (إن مفعَّل) | 1 لكل |
+
+#### المنطق المُجمَّد (صفر تغيير)
+- ✅ Break detection logic (`final_buy_break` / `final_sell_break`) — السطور 301-302
+- ✅ Touch logic (4 touches) — السطور 390-393
+- ✅ Activation/unlock/mode/TP/SL — صفر تغيير
+- ✅ Object pool، architecture، palette — صفر تغيير
