@@ -1,0 +1,797 @@
+//@version=5
+// ============================================================
+//  Gold Sniper V9 — Strategy Core
+// ------------------------------------------------------------
+//  • 10 مناطق سعرية يدوية (Top / Bottom)
+//  • المناطق حية دائماً — تعود للعمل بعد الكسر
+//  • الكسر = إغلاق شمعة M15 خارج البوكس (ليس داخله ولا الذيل وحده)
+//  • إشارات اللمس: 🟢 BUY / 🟩 REBUY / 🔴 SELL / 🟥 RESELL
+//  • تنبيهات الكسر: M15 (مفرد + متتالي) / H1 / H4
+//  • Anti-Repaint + Side Lock + Zone Freeze + Reload-Reset + Adjacent Zones
+//  • رسم صفقة ناشطة واحدة (BUY/SELL + REBUY عند التفعيل + TP1/TP2 + SL)
+// ============================================================
+indicator("Gold Sniper V9 — Strategy Core", overlay = true, max_boxes_count = 80, max_labels_count = 500, max_lines_count = 50)
+
+//==================================================
+// 🔒 متغيّرات عامة (مصفوفات أحادية لتعديلها من داخل f_zone)
+//==================================================
+varip _g_buy_arr  = array.new_int(1, -1)
+varip _g_sell_arr = array.new_int(1, -1)
+
+// رسم الصفقة الناشطة — صفقة واحدة فقط
+varip _trade_active = array.new_int(1, 0)
+varip _trade_dir    = array.new_string(1, "")
+varip _trade_zone   = array.new_int(1, 0)
+varip _trade_entry  = array.new_float(1, 0.0)
+varip _trade_sl     = array.new_float(1, 0.0)
+varip _trade_tp1    = array.new_float(1, 0.0)
+varip _trade_tp2    = array.new_float(1, 0.0)
+varip _trade_rebuy  = array.new_float(1, 0.0)
+varip _trade_reb_on = array.new_int(1, 0)
+varip _trade_bar    = array.new_int(1, 0)
+
+//==================================================
+// ⚙️ الإعدادات
+//==================================================
+g          = "الإعدادات العامة"
+offset     = input.float(1.0, "حساسية اللمس (Offset)", minval = 0.0, step = 0.1, group = g)
+label_off  = input.int(0, "إزاحة الأرقام", minval = 0, maxval = 200, step = 1, group = g)
+show_dist  = input.float(0.0, "مسافة الإظهار (0 = الكل)", minval = 0.0, step = 1.0, group = g)
+show_trade   = input.bool(true,  "إظهار رسم الصفقة الناشطة", group = g)
+sl_dist      = input.float(3.0,  "مسافة SL خارج البوكس ($)", minval = 0.1, step = 0.5, group = g)
+extend_right = input.int(35,     "تمديد البوكسات لليمين (شموع)", minval = 5, maxval = 200, step = 1, group = g)
+
+grp_col = "ألوان المناطق"
+buy_col  = input.color(color.new(color.green, 80), "لون الشراء", group = grp_col)
+sell_col = input.color(color.new(color.red, 80),   "لون البيع",  group = grp_col)
+
+grp_tr = "ألوان رسم الصفقة"
+trade_blue = input.color(color.new(#3B82F6, 85), "المنطقة الزرقاء (TP)", group = grp_tr)
+trade_red  = input.color(color.new(#EF4444, 85), "المنطقة الحمراء (SL)", group = grp_tr)
+
+f_num(x) => str.tostring(x, "#.##")
+v(s)     => nz(str.tonumber(s))
+
+// مساعد: كرّر سلسلة n مرة (لبناء أسهم الكسر المتتالي حسب عدد المناطق)
+f_repeat(s, n) =>
+    string r = ""
+    if n > 0
+        for i = 1 to n
+            r += s
+    r
+
+//==================================================
+// 📥 المناطق العشر (افتراضي الذهب)
+//==================================================
+z1   = input.bool(true,  "1",  inline = "1")
+v1t  = v(input.string("3665", "T", inline = "1"))
+v1b  = v(input.string("3655", "B", inline = "1"))
+
+z2   = input.bool(true,  "2",  inline = "2")
+v2t  = v(input.string("3425", "T", inline = "2"))
+v2b  = v(input.string("3415", "B", inline = "2"))
+
+z3   = input.bool(true,  "3",  inline = "3")
+v3t  = v(input.string("3300", "T", inline = "3"))
+v3b  = v(input.string("3290", "B", inline = "3"))
+
+z4   = input.bool(true,  "4",  inline = "4")
+v4t  = v(input.string("3200", "T", inline = "4"))
+v4b  = v(input.string("3190", "B", inline = "4"))
+
+z5   = input.bool(true,  "5",  inline = "5")
+v5t  = v(input.string("3100", "T", inline = "5"))
+v5b  = v(input.string("3090", "B", inline = "5"))
+
+z6   = input.bool(true,  "6",  inline = "6")
+v6t  = v(input.string("3000", "T", inline = "6"))
+v6b  = v(input.string("2990", "B", inline = "6"))
+
+z7   = input.bool(true,  "7",  inline = "7")
+v7t  = v(input.string("2900", "T", inline = "7"))
+v7b  = v(input.string("2890", "B", inline = "7"))
+
+z8   = input.bool(true,  "8",  inline = "8")
+v8t  = v(input.string("2800", "T", inline = "8"))
+v8b  = v(input.string("2790", "B", inline = "8"))
+
+z9   = input.bool(true,  "9",  inline = "9")
+v9t  = v(input.string("2700", "T", inline = "9"))
+v9b  = v(input.string("2690", "B", inline = "9"))
+
+z10  = input.bool(true,  "10", inline = "10")
+v10t = v(input.string("2600", "T", inline = "10"))
+v10b = v(input.string("2590", "B", inline = "10"))
+
+//==================================================
+// 🎯 حساب TP2 — حد المنطقة المعاكسة الأقرب
+// • شراء: TP2 = Bot (قاع) المنطقة فوق ← أوّل ملامسة للمنطقة المعاكسة
+// • بيع : TP2 = Top (قمة) المنطقة تحت ← أوّل ملامسة للمنطقة المعاكسة
+// • TP1 = نصف المسافة بين Entry و TP2 (يحسب في الكود الرئيسي)
+// • إذا لا توجد منطقة معاكسة → الدالة تُرجع na (الرسم لا يُفتح)
+//==================================================
+f_tp2_buy(t) =>
+    float min_gap = 5.0
+    float r = na
+    if z1  and v1b  > t + min_gap
+        r := na(r) ? v1b  : math.min(r, v1b)
+    if z2  and v2b  > t + min_gap
+        r := na(r) ? v2b  : math.min(r, v2b)
+    if z3  and v3b  > t + min_gap
+        r := na(r) ? v3b  : math.min(r, v3b)
+    if z4  and v4b  > t + min_gap
+        r := na(r) ? v4b  : math.min(r, v4b)
+    if z5  and v5b  > t + min_gap
+        r := na(r) ? v5b  : math.min(r, v5b)
+    if z6  and v6b  > t + min_gap
+        r := na(r) ? v6b  : math.min(r, v6b)
+    if z7  and v7b  > t + min_gap
+        r := na(r) ? v7b  : math.min(r, v7b)
+    if z8  and v8b  > t + min_gap
+        r := na(r) ? v8b  : math.min(r, v8b)
+    if z9  and v9b  > t + min_gap
+        r := na(r) ? v9b  : math.min(r, v9b)
+    if z10 and v10b > t + min_gap
+        r := na(r) ? v10b : math.min(r, v10b)
+    r
+
+f_tp2_sell(b) =>
+    float min_gap = 5.0
+    float r = na
+    if z1  and v1t  < b - min_gap
+        r := na(r) ? v1t  : math.max(r, v1t)
+    if z2  and v2t  < b - min_gap
+        r := na(r) ? v2t  : math.max(r, v2t)
+    if z3  and v3t  < b - min_gap
+        r := na(r) ? v3t  : math.max(r, v3t)
+    if z4  and v4t  < b - min_gap
+        r := na(r) ? v4t  : math.max(r, v4t)
+    if z5  and v5t  < b - min_gap
+        r := na(r) ? v5t  : math.max(r, v5t)
+    if z6  and v6t  < b - min_gap
+        r := na(r) ? v6t  : math.max(r, v6t)
+    if z7  and v7t  < b - min_gap
+        r := na(r) ? v7t  : math.max(r, v7t)
+    if z8  and v8t  < b - min_gap
+        r := na(r) ? v8t  : math.max(r, v8t)
+    if z9  and v9t  < b - min_gap
+        r := na(r) ? v9t  : math.max(r, v9t)
+    if z10 and v10t < b - min_gap
+        r := na(r) ? v10t : math.max(r, v10t)
+    r
+
+//==================================================
+// 🧱 بيانات M15 (Anti-Repaint — الشمعة المغلقة فعلياً)
+//==================================================
+[mh, ml, mc] = request.security(syminfo.tickerid, "15", [high, low, close], lookahead = barmerge.lookahead_off)
+m15_new = ta.change(time("15"))  != 0
+h1_new  = ta.change(time("60"))  != 0
+h4_new  = ta.change(time("240")) != 0
+h15 = mh[1]
+l15 = ml[1]
+c15 = mc[1]
+
+//==================================================
+// 🧱 بيانات H1 / H4 (Anti-Repaint — الشمعة المغلقة فعلياً)
+// مع lookahead_off، request.security يرجع قيم الشمعة المُغلقة الأخيرة.
+// h1_bt/h1_bb = جسم الشمعة H1 المغلقة الأخيرة
+// h1pc        = close الشمعة H1 قبلها (للتحقق من أن الكسر فعلاً جديد)
+//==================================================
+[h1op, h1cl] = request.security(syminfo.tickerid, "60",  [open, close], lookahead = barmerge.lookahead_off)
+[h4op, h4cl] = request.security(syminfo.tickerid, "240", [open, close], lookahead = barmerge.lookahead_off)
+h1pc = h1cl[1]  // close الشمعة H1 قبل المُغلقة الأخيرة
+h4pc = h4cl[1]  // close الشمعة H4 قبل المُغلقة الأخيرة
+float h1_bt = math.max(h1op, h1cl)
+float h1_bb = math.min(h1op, h1cl)
+float h4_bt = math.max(h4op, h4cl)
+float h4_bb = math.min(h4op, h4cl)
+
+//==================================================
+// 🧠 محرّك المنطقة — آلة حالة لكل منطقة
+//==================================================
+// return: [up_break, dn_break, buy_evt, rebuy_evt, sell_evt, resell_evt, bot, top]
+f_zone(en, top, bot, zid) =>
+    varip string mode = na
+    varip bool b1 = false
+    varip bool b2 = false
+    varip bool s1 = false
+    varip bool s2 = false
+    varip bool first_rt_done = false
+    varip string frozen_dir = na
+    varip int    lock_bar   = -1
+
+    bool up_brk = false
+    bool dn_brk = false
+    bool buy_e  = false
+    bool reb_e  = false
+    bool sel_e  = false
+    bool res_e  = false
+
+    bool valid = en and top > 0 and bot > 0 and top > bot
+
+    var box   bx = box.new(0, 0.0, 0, 0.0, border_width = 0, bgcolor = color.new(color.gray, 100))
+    var label lb = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = #0F1116, size = size.small)
+
+    if valid
+        // ── التهيئة الأولى للاتجاه (Side Lock) ──
+        if na(mode)
+            mode := close >= top ? "BUY" : (close <= bot ? "SELL" : ((top - close) < (close - bot) ? "BUY" : "SELL"))
+
+        // ── تنظيف لمرة واحدة عند الانتقال إلى الزمن الحي ──
+        if barstate.isrealtime and not first_rt_done
+            b1 := false
+            b2 := false
+            s1 := false
+            s2 := false
+            frozen_dir := na
+            lock_bar   := -1
+            first_rt_done := true
+
+        // ── إلغاء التجميد بمنطقة عكسية ──
+        if not na(frozen_dir)
+            if frozen_dir == "BUY"  and array.get(_g_sell_arr, 0) >= lock_bar
+                frozen_dir := na
+            else if frozen_dir == "SELL" and array.get(_g_buy_arr, 0) >= lock_bar
+                frozen_dir := na
+
+        // ── الكسر عند إغلاق M15 ──
+        if m15_new
+            bool broke = false
+            if mode == "BUY" and c15 < bot
+                mode   := "SELL"
+                dn_brk := true
+                broke  := true
+            else if mode == "SELL" and c15 > top
+                mode   := "BUY"
+                up_brk := true
+                broke  := true
+            if broke
+                b1 := false
+                b2 := false
+                s1 := false
+                s2 := false
+                frozen_dir := na
+                lock_bar   := -1
+                if array.get(_trade_active, 0) == 1 and array.get(_trade_zone, 0) == zid
+                    array.set(_trade_active, 0, 0)
+            // إعادة التسليح عند ابتعاد M15 المغلقة
+            // الشرط: الشمعة المغلقة بذيلها بعيدة كاملة عن المنطقة.
+            if not broke
+                if mode == "BUY"  and l15 > top + offset
+                    b1 := false
+                    b2 := false
+                if mode == "SELL" and h15 < bot - offset
+                    s1 := false
+                    s2 := false
+
+        // ── إشارات اللمس اللحظية ──
+        // 🛡️ التعزيز يعمل دائماً عند تحقق b1/s1 — حتى لو تغيّر mode بكسر بين الإشارة الأولى والتعزيز.
+        // التعزيز جزء من نفس الصفقة، ليس صفقة جديدة.
+        // ⚠️ شرط إضافي: لا تُطلق إشارة جديدة في نفس bar الكسر — يجب انتظار شمعة جديدة على الأقل.
+        bool can_signal_now = not (m15_new and (up_brk or dn_brk))
+        if mode == "BUY" and can_signal_now
+            // 🟢 شراء — ذيل لمس Top
+            if not b1 and na(frozen_dir) and low <= top + offset
+                b1    := true
+                buy_e := true
+                frozen_dir := "BUY"
+                lock_bar   := bar_index
+                array.set(_g_buy_arr, 0, bar_index)
+                // 🎨 رسم الصفقة: لا تُفتح إلا إذا توجد منطقة معاكسة (tp2v != na)
+                //   • Entry = Top البوكس
+                //   • SL    = Bot البوكس - 3$ (تحت البوكس)
+                //   • TP2   = Top المنطقة المعاكسة (أبعد حد)
+                //   • TP1   = نصف المسافة بين Entry و TP2
+                //   • REBUY = Bot البوكس (داخل المنطقة الحمراء)
+                float tp2v = f_tp2_buy(top)
+                if array.get(_trade_active, 0) == 0 and not na(tp2v)
+                    array.set(_trade_active, 0, 1)
+                    array.set(_trade_dir,    0, "BUY")
+                    array.set(_trade_zone,   0, zid)
+                    array.set(_trade_entry,  0, top)
+                    array.set(_trade_sl,     0, bot - sl_dist)
+                    array.set(_trade_tp2,    0, tp2v)
+                    array.set(_trade_tp1,    0, top + (tp2v - top) / 2)
+                    array.set(_trade_reb_on, 0, 0)
+                    array.set(_trade_rebuy,  0, bot)
+                    array.set(_trade_bar,    0, bar_index)
+                alert("🟢 BUY " + f_num(top), alert.freq_once_per_bar)
+        else if mode == "SELL" and can_signal_now
+            // 🔴 بيع — ذيل لمس Bot
+            if not s1 and na(frozen_dir) and high >= bot - offset
+                s1    := true
+                sel_e := true
+                frozen_dir := "SELL"
+                lock_bar   := bar_index
+                array.set(_g_sell_arr, 0, bar_index)
+                // 🎨 رسم الصفقة: لا تُفتح إلا إذا توجد منطقة معاكسة (tp2v != na)
+                //   • Entry  = Bot البوكس
+                //   • SL     = Top البوكس + 3$ (فوق البوكس)
+                //   • TP2    = Bot المنطقة المعاكسة (أبعد حد)
+                //   • TP1    = نصف المسافة بين Entry و TP2
+                //   • RESELL = Top البوكس (داخل المنطقة الحمراء)
+                float tp2v = f_tp2_sell(bot)
+                if array.get(_trade_active, 0) == 0 and not na(tp2v)
+                    array.set(_trade_active, 0, 1)
+                    array.set(_trade_dir,    0, "SELL")
+                    array.set(_trade_zone,   0, zid)
+                    array.set(_trade_entry,  0, bot)
+                    array.set(_trade_sl,     0, top + sl_dist)
+                    array.set(_trade_tp2,    0, tp2v)
+                    array.set(_trade_tp1,    0, bot - (bot - tp2v) / 2)
+                    array.set(_trade_reb_on, 0, 0)
+                    array.set(_trade_rebuy,  0, top)
+                    array.set(_trade_bar,    0, bar_index)
+                alert("🔴 SELL " + f_num(bot), alert.freq_once_per_bar)
+
+        // 🟩 تعزيز شراء — يعمل دائماً عند تحقق b1، خارج بلوك mode
+        // (لأن mode قد ينقلب بكسر بين ○ BUY والتعزيز، فلا نريد قطع التعزيز عن صفقته)
+        if b1 and not b2 and low <= bot + offset
+            b2    := true
+            reb_e := true
+            if array.get(_trade_zone, 0) == zid and array.get(_trade_dir, 0) == "BUY"
+                array.set(_trade_reb_on, 0, 1)
+            alert("🟩 REBUY " + f_num(bot), alert.freq_once_per_bar)
+
+        // 🟥 تعزيز بيع — يعمل دائماً عند تحقق s1، خارج بلوك mode
+        if s1 and not s2 and high >= top - offset
+            s2    := true
+            res_e := true
+            if array.get(_trade_zone, 0) == zid and array.get(_trade_dir, 0) == "SELL"
+                array.set(_trade_reb_on, 0, 1)
+            alert("🟥 RESELL " + f_num(top), alert.freq_once_per_bar)
+
+        // ── رسم البوكس + الرقم ──
+        bool show_it = show_dist <= 0 or math.abs(close - (top + bot) / 2) <= show_dist
+        if show_it
+            color zone_col = mode == "BUY" ? buy_col : sell_col
+            box.set_lefttop(bx, math.max(0, bar_index - 500), top)
+            box.set_rightbottom(bx, bar_index + extend_right, bot)
+            box.set_bgcolor(bx, zone_col)
+            label.set_xy(lb, bar_index + extend_right + label_off, (top + bot) / 2)
+            label.set_text(lb, f_num(bot) + " - " + f_num(top))
+            label.set_color(lb, color.new(zone_col, 0))
+            label.set_textcolor(lb, #0F1116)
+        else
+            box.set_bgcolor(bx, color.new(color.gray, 100))
+            label.set_color(lb, color.new(color.gray, 100))
+            label.set_text(lb, "")
+    else
+        box.set_bgcolor(bx, color.new(color.gray, 100))
+        label.set_color(lb, color.new(color.gray, 100))
+        label.set_text(lb, "")
+
+    [up_brk, dn_brk, buy_e, reb_e, sel_e, res_e, bot, top]
+
+//==================================================
+// 🚀 تشغيل المناطق العشر
+//==================================================
+[ub1,  db1,  be1,  re1,  se1,  rs1,  zb1,  zt1]  = f_zone(z1,  v1t,  v1b,  1)
+[ub2,  db2,  be2,  re2,  se2,  rs2,  zb2,  zt2]  = f_zone(z2,  v2t,  v2b,  2)
+[ub3,  db3,  be3,  re3,  se3,  rs3,  zb3,  zt3]  = f_zone(z3,  v3t,  v3b,  3)
+[ub4,  db4,  be4,  re4,  se4,  rs4,  zb4,  zt4]  = f_zone(z4,  v4t,  v4b,  4)
+[ub5,  db5,  be5,  re5,  se5,  rs5,  zb5,  zt5]  = f_zone(z5,  v5t,  v5b,  5)
+[ub6,  db6,  be6,  re6,  se6,  rs6,  zb6,  zt6]  = f_zone(z6,  v6t,  v6b,  6)
+[ub7,  db7,  be7,  re7,  se7,  rs7,  zb7,  zt7]  = f_zone(z7,  v7t,  v7b,  7)
+[ub8,  db8,  be8,  re8,  se8,  rs8,  zb8,  zt8]  = f_zone(z8,  v8t,  v8b,  8)
+[ub9,  db9,  be9,  re9,  se9,  rs9,  zb9,  zt9]  = f_zone(z9,  v9t,  v9b,  9)
+[ub10, db10, be10, re10, se10, rs10, zb10, zt10] = f_zone(z10, v10t, v10b, 10)
+
+//==================================================
+// ⚡ تجميع كسر M15 (مفرد + متتالي)
+//==================================================
+int up_n = (ub1?1:0)+(ub2?1:0)+(ub3?1:0)+(ub4?1:0)+(ub5?1:0)+(ub6?1:0)+(ub7?1:0)+(ub8?1:0)+(ub9?1:0)+(ub10?1:0)
+int dn_n = (db1?1:0)+(db2?1:0)+(db3?1:0)+(db4?1:0)+(db5?1:0)+(db6?1:0)+(db7?1:0)+(db8?1:0)+(db9?1:0)+(db10?1:0)
+
+float HUGE  = 1e10
+float up_lo = math.min(ub1?zb1:HUGE,  math.min(ub2?zb2:HUGE,  math.min(ub3?zb3:HUGE,  math.min(ub4?zb4:HUGE,  math.min(ub5?zb5:HUGE,  math.min(ub6?zb6:HUGE,  math.min(ub7?zb7:HUGE,  math.min(ub8?zb8:HUGE,  math.min(ub9?zb9:HUGE, ub10?zb10:HUGE)))))))))
+float up_hi = math.max(ub1?zt1:-HUGE, math.max(ub2?zt2:-HUGE, math.max(ub3?zt3:-HUGE, math.max(ub4?zt4:-HUGE, math.max(ub5?zt5:-HUGE, math.max(ub6?zt6:-HUGE, math.max(ub7?zt7:-HUGE, math.max(ub8?zt8:-HUGE, math.max(ub9?zt9:-HUGE, ub10?zt10:-HUGE)))))))))
+float dn_lo = math.min(db1?zb1:HUGE,  math.min(db2?zb2:HUGE,  math.min(db3?zb3:HUGE,  math.min(db4?zb4:HUGE,  math.min(db5?zb5:HUGE,  math.min(db6?zb6:HUGE,  math.min(db7?zb7:HUGE,  math.min(db8?zb8:HUGE,  math.min(db9?zb9:HUGE, db10?zb10:HUGE)))))))))
+float dn_hi = math.max(db1?zt1:-HUGE, math.max(db2?zt2:-HUGE, math.max(db3?zt3:-HUGE, math.max(db4?zt4:-HUGE, math.max(db5?zt5:-HUGE, math.max(db6?zt6:-HUGE, math.max(db7?zt7:-HUGE, math.max(db8?zt8:-HUGE, math.max(db9?zt9:-HUGE, db10?zt10:-HUGE)))))))))
+
+if up_n == 1
+    alert("🟢⬆️ M15 BREAK [ " + f_num(up_lo) + " → " + f_num(up_hi) + " ]", alert.freq_once_per_bar_close)
+else if up_n >= 2
+    alert("🟢⏫ M15 MULTI BREAK [ " + f_num(up_lo) + " → " + f_num(up_hi) + " ]", alert.freq_once_per_bar_close)
+if dn_n == 1
+    alert("🔴⬇️ M15 BREAK [ " + f_num(dn_hi) + " → " + f_num(dn_lo) + " ]", alert.freq_once_per_bar_close)
+else if dn_n >= 2
+    alert("🔴⏬ M15 MULTI BREAK [ " + f_num(dn_hi) + " → " + f_num(dn_lo) + " ]", alert.freq_once_per_bar_close)
+
+//==================================================
+// ⚡ كسر H1 — شمعة H1 المغلقة جسمها يخرج خارج المنطقة
+//==================================================
+// منطق مستقل عن M15: عند إغلاق شمعة H1، نفحص هل جسمها يكسر أي منطقة.
+// كسر صعود: body_top (max(open,close)) > top
+// كسر هبوط: body_bot (min(open,close)) < bot
+// التحقق من "ليس مكسوراً مسبقاً": close السابق كان داخل أو في الجهة المعاكسة.
+
+// flags عامة لتوفير حالة الكسر للـ alertcondition (تكون true فقط في bar الإغلاق)
+bool h1_up_brk_evt    = false
+bool h1_dn_brk_evt    = false
+bool h1_up_multi_evt  = false
+bool h1_dn_multi_evt  = false
+
+if h1_new and barstate.isconfirmed
+    int h1_up_n = 0
+    int h1_dn_n = 0
+    float h1_up_lo = na
+    float h1_up_hi = na
+    float h1_dn_lo = na
+    float h1_dn_hi = na
+
+    // فحص كل المناطق العشر
+    if z1 and v1t > v1b
+        if h1_bt > v1t and h1pc <= v1t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v1b : math.min(h1_up_lo, v1b)
+            h1_up_hi := na(h1_up_hi) ? v1t : math.max(h1_up_hi, v1t)
+        if h1_bb < v1b and h1pc >= v1b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v1b : math.min(h1_dn_lo, v1b)
+            h1_dn_hi := na(h1_dn_hi) ? v1t : math.max(h1_dn_hi, v1t)
+    if z2 and v2t > v2b
+        if h1_bt > v2t and h1pc <= v2t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v2b : math.min(h1_up_lo, v2b)
+            h1_up_hi := na(h1_up_hi) ? v2t : math.max(h1_up_hi, v2t)
+        if h1_bb < v2b and h1pc >= v2b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v2b : math.min(h1_dn_lo, v2b)
+            h1_dn_hi := na(h1_dn_hi) ? v2t : math.max(h1_dn_hi, v2t)
+    if z3 and v3t > v3b
+        if h1_bt > v3t and h1pc <= v3t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v3b : math.min(h1_up_lo, v3b)
+            h1_up_hi := na(h1_up_hi) ? v3t : math.max(h1_up_hi, v3t)
+        if h1_bb < v3b and h1pc >= v3b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v3b : math.min(h1_dn_lo, v3b)
+            h1_dn_hi := na(h1_dn_hi) ? v3t : math.max(h1_dn_hi, v3t)
+    if z4 and v4t > v4b
+        if h1_bt > v4t and h1pc <= v4t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v4b : math.min(h1_up_lo, v4b)
+            h1_up_hi := na(h1_up_hi) ? v4t : math.max(h1_up_hi, v4t)
+        if h1_bb < v4b and h1pc >= v4b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v4b : math.min(h1_dn_lo, v4b)
+            h1_dn_hi := na(h1_dn_hi) ? v4t : math.max(h1_dn_hi, v4t)
+    if z5 and v5t > v5b
+        if h1_bt > v5t and h1pc <= v5t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v5b : math.min(h1_up_lo, v5b)
+            h1_up_hi := na(h1_up_hi) ? v5t : math.max(h1_up_hi, v5t)
+        if h1_bb < v5b and h1pc >= v5b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v5b : math.min(h1_dn_lo, v5b)
+            h1_dn_hi := na(h1_dn_hi) ? v5t : math.max(h1_dn_hi, v5t)
+    if z6 and v6t > v6b
+        if h1_bt > v6t and h1pc <= v6t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v6b : math.min(h1_up_lo, v6b)
+            h1_up_hi := na(h1_up_hi) ? v6t : math.max(h1_up_hi, v6t)
+        if h1_bb < v6b and h1pc >= v6b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v6b : math.min(h1_dn_lo, v6b)
+            h1_dn_hi := na(h1_dn_hi) ? v6t : math.max(h1_dn_hi, v6t)
+    if z7 and v7t > v7b
+        if h1_bt > v7t and h1pc <= v7t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v7b : math.min(h1_up_lo, v7b)
+            h1_up_hi := na(h1_up_hi) ? v7t : math.max(h1_up_hi, v7t)
+        if h1_bb < v7b and h1pc >= v7b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v7b : math.min(h1_dn_lo, v7b)
+            h1_dn_hi := na(h1_dn_hi) ? v7t : math.max(h1_dn_hi, v7t)
+    if z8 and v8t > v8b
+        if h1_bt > v8t and h1pc <= v8t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v8b : math.min(h1_up_lo, v8b)
+            h1_up_hi := na(h1_up_hi) ? v8t : math.max(h1_up_hi, v8t)
+        if h1_bb < v8b and h1pc >= v8b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v8b : math.min(h1_dn_lo, v8b)
+            h1_dn_hi := na(h1_dn_hi) ? v8t : math.max(h1_dn_hi, v8t)
+    if z9 and v9t > v9b
+        if h1_bt > v9t and h1pc <= v9t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v9b : math.min(h1_up_lo, v9b)
+            h1_up_hi := na(h1_up_hi) ? v9t : math.max(h1_up_hi, v9t)
+        if h1_bb < v9b and h1pc >= v9b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v9b : math.min(h1_dn_lo, v9b)
+            h1_dn_hi := na(h1_dn_hi) ? v9t : math.max(h1_dn_hi, v9t)
+    if z10 and v10t > v10b
+        if h1_bt > v10t and h1pc <= v10t
+            h1_up_n += 1
+            h1_up_lo := na(h1_up_lo) ? v10b : math.min(h1_up_lo, v10b)
+            h1_up_hi := na(h1_up_hi) ? v10t : math.max(h1_up_hi, v10t)
+        if h1_bb < v10b and h1pc >= v10b
+            h1_dn_n += 1
+            h1_dn_lo := na(h1_dn_lo) ? v10b : math.min(h1_dn_lo, v10b)
+            h1_dn_hi := na(h1_dn_hi) ? v10t : math.max(h1_dn_hi, v10t)
+
+    // إطلاق التنبيه
+    if h1_up_n == 1
+        h1_up_brk_evt := true
+        alert("🟢⬆️ H1 BREAK [ " + f_num(h1_up_lo) + " → " + f_num(h1_up_hi) + " ]", alert.freq_once_per_bar)
+    else if h1_up_n >= 2
+        h1_up_multi_evt := true
+        alert("🟢⏫ H1 MULTI BREAK [ " + f_num(h1_up_lo) + " → " + f_num(h1_up_hi) + " ]", alert.freq_once_per_bar)
+    if h1_dn_n == 1
+        h1_dn_brk_evt := true
+        alert("🔴⬇️ H1 BREAK [ " + f_num(h1_dn_hi) + " → " + f_num(h1_dn_lo) + " ]", alert.freq_once_per_bar)
+    else if h1_dn_n >= 2
+        h1_dn_multi_evt := true
+        alert("🔴⏬ H1 MULTI BREAK [ " + f_num(h1_dn_hi) + " → " + f_num(h1_dn_lo) + " ]", alert.freq_once_per_bar)
+
+//==================================================
+// ⚡ كسر H4 — شمعة H4 المغلقة جسمها يخرج خارج المنطقة
+//==================================================
+bool h4_up_brk_evt    = false
+bool h4_dn_brk_evt    = false
+bool h4_up_multi_evt  = false
+bool h4_dn_multi_evt  = false
+
+if h4_new and barstate.isconfirmed
+    int h4_up_n = 0
+    int h4_dn_n = 0
+    float h4_up_lo = na
+    float h4_up_hi = na
+    float h4_dn_lo = na
+    float h4_dn_hi = na
+
+    if z1 and v1t > v1b
+        if h4_bt > v1t and h4pc <= v1t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v1b : math.min(h4_up_lo, v1b)
+            h4_up_hi := na(h4_up_hi) ? v1t : math.max(h4_up_hi, v1t)
+        if h4_bb < v1b and h4pc >= v1b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v1b : math.min(h4_dn_lo, v1b)
+            h4_dn_hi := na(h4_dn_hi) ? v1t : math.max(h4_dn_hi, v1t)
+    if z2 and v2t > v2b
+        if h4_bt > v2t and h4pc <= v2t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v2b : math.min(h4_up_lo, v2b)
+            h4_up_hi := na(h4_up_hi) ? v2t : math.max(h4_up_hi, v2t)
+        if h4_bb < v2b and h4pc >= v2b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v2b : math.min(h4_dn_lo, v2b)
+            h4_dn_hi := na(h4_dn_hi) ? v2t : math.max(h4_dn_hi, v2t)
+    if z3 and v3t > v3b
+        if h4_bt > v3t and h4pc <= v3t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v3b : math.min(h4_up_lo, v3b)
+            h4_up_hi := na(h4_up_hi) ? v3t : math.max(h4_up_hi, v3t)
+        if h4_bb < v3b and h4pc >= v3b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v3b : math.min(h4_dn_lo, v3b)
+            h4_dn_hi := na(h4_dn_hi) ? v3t : math.max(h4_dn_hi, v3t)
+    if z4 and v4t > v4b
+        if h4_bt > v4t and h4pc <= v4t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v4b : math.min(h4_up_lo, v4b)
+            h4_up_hi := na(h4_up_hi) ? v4t : math.max(h4_up_hi, v4t)
+        if h4_bb < v4b and h4pc >= v4b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v4b : math.min(h4_dn_lo, v4b)
+            h4_dn_hi := na(h4_dn_hi) ? v4t : math.max(h4_dn_hi, v4t)
+    if z5 and v5t > v5b
+        if h4_bt > v5t and h4pc <= v5t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v5b : math.min(h4_up_lo, v5b)
+            h4_up_hi := na(h4_up_hi) ? v5t : math.max(h4_up_hi, v5t)
+        if h4_bb < v5b and h4pc >= v5b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v5b : math.min(h4_dn_lo, v5b)
+            h4_dn_hi := na(h4_dn_hi) ? v5t : math.max(h4_dn_hi, v5t)
+    if z6 and v6t > v6b
+        if h4_bt > v6t and h4pc <= v6t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v6b : math.min(h4_up_lo, v6b)
+            h4_up_hi := na(h4_up_hi) ? v6t : math.max(h4_up_hi, v6t)
+        if h4_bb < v6b and h4pc >= v6b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v6b : math.min(h4_dn_lo, v6b)
+            h4_dn_hi := na(h4_dn_hi) ? v6t : math.max(h4_dn_hi, v6t)
+    if z7 and v7t > v7b
+        if h4_bt > v7t and h4pc <= v7t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v7b : math.min(h4_up_lo, v7b)
+            h4_up_hi := na(h4_up_hi) ? v7t : math.max(h4_up_hi, v7t)
+        if h4_bb < v7b and h4pc >= v7b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v7b : math.min(h4_dn_lo, v7b)
+            h4_dn_hi := na(h4_dn_hi) ? v7t : math.max(h4_dn_hi, v7t)
+    if z8 and v8t > v8b
+        if h4_bt > v8t and h4pc <= v8t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v8b : math.min(h4_up_lo, v8b)
+            h4_up_hi := na(h4_up_hi) ? v8t : math.max(h4_up_hi, v8t)
+        if h4_bb < v8b and h4pc >= v8b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v8b : math.min(h4_dn_lo, v8b)
+            h4_dn_hi := na(h4_dn_hi) ? v8t : math.max(h4_dn_hi, v8t)
+    if z9 and v9t > v9b
+        if h4_bt > v9t and h4pc <= v9t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v9b : math.min(h4_up_lo, v9b)
+            h4_up_hi := na(h4_up_hi) ? v9t : math.max(h4_up_hi, v9t)
+        if h4_bb < v9b and h4pc >= v9b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v9b : math.min(h4_dn_lo, v9b)
+            h4_dn_hi := na(h4_dn_hi) ? v9t : math.max(h4_dn_hi, v9t)
+    if z10 and v10t > v10b
+        if h4_bt > v10t and h4pc <= v10t
+            h4_up_n += 1
+            h4_up_lo := na(h4_up_lo) ? v10b : math.min(h4_up_lo, v10b)
+            h4_up_hi := na(h4_up_hi) ? v10t : math.max(h4_up_hi, v10t)
+        if h4_bb < v10b and h4pc >= v10b
+            h4_dn_n += 1
+            h4_dn_lo := na(h4_dn_lo) ? v10b : math.min(h4_dn_lo, v10b)
+            h4_dn_hi := na(h4_dn_hi) ? v10t : math.max(h4_dn_hi, v10t)
+
+    if h4_up_n == 1
+        h4_up_brk_evt := true
+        alert("🟢⬆️ H4 BREAK [ " + f_num(h4_up_lo) + " → " + f_num(h4_up_hi) + " ]", alert.freq_once_per_bar)
+    else if h4_up_n >= 2
+        h4_up_multi_evt := true
+        alert("🟢⏫ H4 MULTI BREAK [ " + f_num(h4_up_lo) + " → " + f_num(h4_up_hi) + " ]", alert.freq_once_per_bar)
+    if h4_dn_n == 1
+        h4_dn_brk_evt := true
+        alert("🔴⬇️ H4 BREAK [ " + f_num(h4_dn_hi) + " → " + f_num(h4_dn_lo) + " ]", alert.freq_once_per_bar)
+    else if h4_dn_n >= 2
+        h4_dn_multi_evt := true
+        alert("🔴⏬ H4 MULTI BREAK [ " + f_num(h4_dn_hi) + " → " + f_num(h4_dn_lo) + " ]", alert.freq_once_per_bar)
+
+//==================================================
+// 🎨 رسم الصفقة الناشطة
+//==================================================
+var box   t_blue_bx  = box.new(0, 0.0, 0, 0.0, border_width = 0, bgcolor = color.new(color.gray, 100))
+var box   t_red_bx   = box.new(0, 0.0, 0, 0.0, border_width = 0, bgcolor = color.new(color.gray, 100))
+var line  t_entry_ln = line.new(0, 0.0, 0, 0.0, color = color.new(color.gray, 100), style = line.style_dashed, width = 2)
+var line  t_tp1_ln   = line.new(0, 0.0, 0, 0.0, color = color.new(color.gray, 100), style = line.style_dashed, width = 1)
+var line  t_tp2_ln   = line.new(0, 0.0, 0, 0.0, color = color.new(color.gray, 100), style = line.style_solid,  width = 1)
+var line  t_sl_ln    = line.new(0, 0.0, 0, 0.0, color = color.new(color.gray, 100), style = line.style_solid,  width = 1)
+var line  t_reb_ln   = line.new(0, 0.0, 0, 0.0, color = color.new(color.gray, 100), style = line.style_dashed, width = 1)
+var label t_entry_lb = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white, size = size.small)
+var label t_tp1_lb   = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white, size = size.small)
+var label t_tp2_lb   = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white, size = size.small)
+var label t_sl_lb    = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white, size = size.small)
+var label t_reb_lb   = label.new(0, 0.0, "", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.white, size = size.small)
+
+// إغلاق الرسم عند ضرب TP2 أو SL
+if array.get(_trade_active, 0) == 1
+    string td = array.get(_trade_dir, 0)
+    float  tp = array.get(_trade_tp2, 0)
+    float  sl = array.get(_trade_sl,  0)
+    bool hit_tp = td == "BUY" ? high >= tp : low  <= tp
+    bool hit_sl = td == "BUY" ? low  <= sl : high >= sl
+    if hit_tp or hit_sl
+        array.set(_trade_active, 0, 0)
+
+// رسم الصفقة الناشطة
+if show_trade and array.get(_trade_active, 0) == 1
+    string td  = array.get(_trade_dir,    0)
+    float  ent = array.get(_trade_entry,  0)
+    float  sl  = array.get(_trade_sl,     0)
+    float  tp1 = array.get(_trade_tp1,    0)
+    float  tp2 = array.get(_trade_tp2,    0)
+    float  reb = array.get(_trade_rebuy,  0)
+    int    rb_on = array.get(_trade_reb_on, 0)
+    int    t_bar = array.get(_trade_bar,    0)
+    int    r_bar = bar_index + extend_right
+
+    float blue_top = td == "BUY" ? tp2 : ent
+    float blue_bot = td == "BUY" ? ent : tp2
+    box.set_lefttop(t_blue_bx, t_bar, blue_top)
+    box.set_rightbottom(t_blue_bx, r_bar, blue_bot)
+    box.set_bgcolor(t_blue_bx, trade_blue)
+
+    float red_top = td == "BUY" ? ent : sl
+    float red_bot = td == "BUY" ? sl  : ent
+    box.set_lefttop(t_red_bx, t_bar, red_top)
+    box.set_rightbottom(t_red_bx, r_bar, red_bot)
+    box.set_bgcolor(t_red_bx, trade_red)
+
+    color ent_col = td == "BUY" ? color.new(#10B981, 0) : color.new(#EF4444, 0)
+    line.set_xy1(t_entry_ln, t_bar, ent)
+    line.set_xy2(t_entry_ln, r_bar, ent)
+    line.set_color(t_entry_ln, ent_col)
+    label.set_xy(t_entry_lb, r_bar, ent)
+    label.set_text(t_entry_lb, (td == "BUY" ? "🟢 BUY " : "🔴 SELL ") + f_num(ent))
+    label.set_color(t_entry_lb, ent_col)
+    label.set_textcolor(t_entry_lb, color.white)
+
+    color tp_col = color.new(#3B82F6, 0)
+    line.set_xy1(t_tp1_ln, t_bar, tp1)
+    line.set_xy2(t_tp1_ln, r_bar, tp1)
+    line.set_color(t_tp1_ln, tp_col)
+    label.set_xy(t_tp1_lb, r_bar, tp1)
+    label.set_text(t_tp1_lb, "TP1 " + f_num(tp1))
+    label.set_color(t_tp1_lb, tp_col)
+    label.set_textcolor(t_tp1_lb, color.white)
+
+    line.set_xy1(t_tp2_ln, t_bar, tp2)
+    line.set_xy2(t_tp2_ln, r_bar, tp2)
+    line.set_color(t_tp2_ln, tp_col)
+    label.set_xy(t_tp2_lb, r_bar, tp2)
+    label.set_text(t_tp2_lb, "TP2 " + f_num(tp2))
+    label.set_color(t_tp2_lb, tp_col)
+    label.set_textcolor(t_tp2_lb, color.white)
+
+    color sl_col = color.new(#EF4444, 0)
+    line.set_xy1(t_sl_ln, t_bar, sl)
+    line.set_xy2(t_sl_ln, r_bar, sl)
+    line.set_color(t_sl_ln, sl_col)
+    label.set_xy(t_sl_lb, r_bar, sl)
+    label.set_text(t_sl_lb, "SL " + f_num(sl))
+    label.set_color(t_sl_lb, sl_col)
+    label.set_textcolor(t_sl_lb, color.white)
+
+    if rb_on == 1
+        // التعزيز مفعَّل — الخط ظاهر بقوة + label
+        color reb_col = color.new(#EF4444, 0)
+        line.set_xy1(t_reb_ln, t_bar, reb)
+        line.set_xy2(t_reb_ln, r_bar, reb)
+        line.set_color(t_reb_ln, reb_col)
+        label.set_xy(t_reb_lb, r_bar, reb)
+        label.set_text(t_reb_lb, (td == "BUY" ? "🟩 REBUY " : "🟥 RESELL ") + f_num(reb))
+        label.set_color(t_reb_lb, reb_col)
+        label.set_textcolor(t_reb_lb, color.white)
+    else
+        // التعزيز لم يُفعَّل بعد — الخط يظهر كمرجع بشفافية متوسطة + label
+        color reb_col_pre = color.new(#EF4444, 50)
+        line.set_xy1(t_reb_ln, t_bar, reb)
+        line.set_xy2(t_reb_ln, r_bar, reb)
+        line.set_color(t_reb_ln, reb_col_pre)
+        label.set_xy(t_reb_lb, r_bar, reb)
+        label.set_text(t_reb_lb, (td == "BUY" ? "REBUY " : "RESELL ") + f_num(reb))
+        label.set_color(t_reb_lb, color.new(#EF4444, 30))
+        label.set_textcolor(t_reb_lb, color.white)
+else
+    box.set_bgcolor(t_blue_bx, color.new(color.gray, 100))
+    box.set_bgcolor(t_red_bx,  color.new(color.gray, 100))
+    line.set_color(t_entry_ln, color.new(color.gray, 100))
+    line.set_color(t_tp1_ln,   color.new(color.gray, 100))
+    line.set_color(t_tp2_ln,   color.new(color.gray, 100))
+    line.set_color(t_sl_ln,    color.new(color.gray, 100))
+    line.set_color(t_reb_ln,   color.new(color.gray, 100))
+    label.set_color(t_entry_lb, color.new(color.gray, 100))
+    label.set_color(t_tp1_lb,   color.new(color.gray, 100))
+    label.set_color(t_tp2_lb,   color.new(color.gray, 100))
+    label.set_color(t_sl_lb,    color.new(color.gray, 100))
+    label.set_color(t_reb_lb,   color.new(color.gray, 100))
+    label.set_text(t_entry_lb, "")
+    label.set_text(t_tp1_lb,   "")
+    label.set_text(t_tp2_lb,   "")
+    label.set_text(t_sl_lb,    "")
+    label.set_text(t_reb_lb,   "")
+
+//==================================================
+// 🔔 alertcondition — لواجهة "Add alert"
+//==================================================
+bool buy_any    = be1 or be2 or be3 or be4 or be5 or be6 or be7 or be8 or be9 or be10
+bool rebuy_any  = re1 or re2 or re3 or re4 or re5 or re6 or re7 or re8 or re9 or re10
+bool sell_any   = se1 or se2 or se3 or se4 or se5 or se6 or se7 or se8 or se9 or se10
+bool resell_any = rs1 or rs2 or rs3 or rs4 or rs5 or rs6 or rs7 or rs8 or rs9 or rs10
+
+alertcondition(buy_any,      "BUY",                 "🟢 BUY")
+alertcondition(rebuy_any,    "REBUY",               "🟩 REBUY")
+alertcondition(sell_any,     "SELL",                "🔴 SELL")
+alertcondition(resell_any,   "RESELL",              "🟥 RESELL")
+alertcondition(up_n >= 1,    "M15 BUY BREAK",       "🟢⬆️ M15 BREAK")
+alertcondition(dn_n >= 1,    "M15 SELL BREAK",      "🔴⬇️ M15 BREAK")
+alertcondition(up_n >= 2,    "M15 MULTI BUY BREAK", "🟢⏫ M15 MULTI BREAK")
+alertcondition(dn_n >= 2,    "M15 MULTI SELL BREAK","🔴⏬ M15 MULTI BREAK")
+alertcondition(h1_up_brk_evt,   "H1 BUY BREAK",        "🟢⬆️ H1 BREAK")
+alertcondition(h1_dn_brk_evt,   "H1 SELL BREAK",       "🔴⬇️ H1 BREAK")
+alertcondition(h1_up_multi_evt, "H1 MULTI BUY BREAK",  "🟢⏫ H1 MULTI BREAK")
+alertcondition(h1_dn_multi_evt, "H1 MULTI SELL BREAK", "🔴⏬ H1 MULTI BREAK")
+alertcondition(h4_up_brk_evt,   "H4 BUY BREAK",        "🟢⬆️ H4 BREAK")
+alertcondition(h4_dn_brk_evt,   "H4 SELL BREAK",       "🔴⬇️ H4 BREAK")
+alertcondition(h4_up_multi_evt, "H4 MULTI BUY BREAK",  "🟢⏫ H4 MULTI BREAK")
+alertcondition(h4_dn_multi_evt, "H4 MULTI SELL BREAK", "🔴⏬ H4 MULTI BREAK")
+alertcondition(true,         "Any alert() function call", "Gold Sniper alert")
