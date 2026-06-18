@@ -1,5 +1,49 @@
 # Gold Sniper - سجل التغييرات
 
+## V10 - Original Institutional Edition (Cloud-Fixed)
+
+ملف جديد `Gold_Sniper_V10.pine` بمعمارية مختلفة عن V202: تركيز على **دورة حياة الصفقة** على M15 (TP1/TP2 ديناميكي + SL + REBUY/RESELL) بدلاً من تنبيهات MTF متعددة.
+
+### ☁️ Cloud Engine — نسخة هجينة (Stable Pool + User Inputs + LastBar Guard)
+
+النسخة النهائية تجمع أفضل ما في النمطين:
+
+1. **Object Pool المستقر** (إنشاء مرة واحدة في `barstate.isfirst`)
+   - 4 خطوط + 2 linefills طوال عمر السكربت — لا تسريب، لا حذف، لا إعادة إنشاء.
+   - مطابق لنمط V10 الأصلي مع `boxes` و `entry_lines`.
+
+2. **inputs المستخدم محفوظة**
+   - `show_clouds` toggle.
+   - `buy_cloud_col` و `sell_cloud_col` كـ inputs قابلة للتعديل.
+   - اللون يُسند في الـ render (عبر `linefill.set_color`)، ليس وقت الإنشاء → **يقبل التغيير المباشر من إعدادات المؤشر**.
+
+3. **`barstate.islast` guard**
+   - الرسم على آخر بار فقط، متّسق مع `should_redraw` في V10.
+   - يمنع آلاف استدعاءات `set_xy1/2` على البارات التاريخية.
+
+4. **`extend=extend.right` على إنشاء الخطوط**
+   - الخط يمتد للأمام تلقائياً، لا حاجة لتحديث `xy2` على البار المستقبلي.
+
+5. **إخفاء كنسي عبر `linefill.set_color(... color(na))`**
+   - بدلاً من `set_xy1(na, na)` (نمط ضمني غير موثّق).
+
+6. **حماية ترتيب linefill** (`math.max/min` على top/bot).
+
+### 🔧 تعديلات نواة V10 لدعم السحابة
+
+- إضافة `var int buy_trend_start_bar` و `sell_trend_start_bar`.
+- التقاط `bar_index` عند عبور `consecutive_count` من 0 → ≥1.
+- مسح بداية الترند المعاكس عند الانعكاس.
+- مسح بداية الترند عند تصفير العدّاد في حالة "NONE".
+- تصريح `max_linefills_count=10` في `indicator(...)`.
+
+### ⚠️ ملاحظات
+
+- نواة V10 (request.security pattern، الشروط الميتة، تصفير العدّاد العدواني، الـ time-stop الصامت، وغيرها) **لم تُعدَّل** في هذه النسخة. تعديلها مخطّط لـ V11 المنفصل.
+- V10 و V202 معماريتهما مختلفة جوهرياً ولا يحلّ أحدهما محلّ الآخر — يمكن استخدامهما معاً (ولكن ليس على نفس الشارت في الغالب).
+
+---
+
 ## V202 - Anti-Repaint Build (نسخة مُصلحة)
 
 ### 🔴 إصلاحات حرجة
